@@ -680,56 +680,115 @@ def _generate_summary_html(
         cache_misses = len(prebaked_data) - cache_hits
         hit_rate = (cache_hits / len(prebaked_data) * 100) if prebaked_data else 0
         
-        # 按 cache_path 分组统计
         from collections import defaultdict
-        grouped = defaultdict(lambda: {"count": 0, "entry": None})
+        
+        # 按 category 分组所有数据
+        category_groups = defaultdict(lambda: {"entries": [], "total": 0, "hits": 0})
+        
+        # 先按 cache_path 去重（同一张图片多次使用）
+        path_to_entry = {}
+        path_counts = defaultdict(int)
+        
         for entry in prebaked_data:
             cache_path = entry.get("cache_path", "")
-            if grouped[cache_path]["entry"] is None:
-                grouped[cache_path]["entry"] = entry
-            grouped[cache_path]["count"] += 1
+            category = entry.get("category", "Unknown")
+            
+            # 统计每个 path 的使用次数
+            path_counts[cache_path] += 1
+            
+            # 保存第一次遇到的 entry（带完整信息）
+            if cache_path not in path_to_entry:
+                path_to_entry[cache_path] = entry
+            
+            # 统计 category 的 hits
+            category_groups[category]["total"] += 1
+            if entry.get("cache_hit"):
+                category_groups[category]["hits"] += 1
         
-        entries_html = ""
-        for cache_path, data in grouped.items():
-            entry = data["entry"]
-            hit_count = data["count"]
-            status_class = "hit" if entry.get("cache_hit") else "miss"
-            status_text = "Cache HIT" if entry.get("cache_hit") else "Generated"
+        # 将去重后的 entries 添加到对应的 category
+        for cache_path, entry in path_to_entry.items():
+            category = entry.get("category", "Unknown")
+            category_groups[category]["entries"].append({
+                "entry": entry,
+                "cache_path": cache_path,
+                "count": path_counts[cache_path]
+            })
+        
+        # 获取 eval_metrics 中的 attack rate
+        eval_by_category = eval_metrics.get('by_category', {}) if eval_metrics else {}
+        
+        # 按 category 名称排序，生成每个 category 的 HTML
+        category_sections_html = ""
+        for category in sorted(category_groups.keys()):
+            cat_data = category_groups[category]
+            total = cat_data["total"]
+            hits = cat_data["hits"]
+            cat_hit_rate = (hits / total * 100) if total > 0 else 0
             
-            # 展开 ~ 路径以便加载图片
-            expanded_path = os.path.expanduser(cache_path) if cache_path else ""
-            img_html = '<span class="no-image">No image</span>'
-            if expanded_path and os.path.exists(expanded_path):
-                try:
-                    from PIL import Image
-                    with Image.open(expanded_path) as img:
-                        img.thumbnail((200, 200))
-                        buffer = BytesIO()
-                        img.save(buffer, format="PNG")
-                        img_b64 = base64.b64encode(buffer.getvalue()).decode()
-                        img_html = f'<img src="data:image/png;base64,{img_b64}" class="thumbnail">'
-                except Exception:
-                    pass
+            # 获取 attack rate
+            attack_rate_str = "N/A"
+            if category in eval_by_category:
+                attack_rate = eval_by_category[category].get('attack_rate', 0)
+                attack_rate_str = f"{attack_rate:.1f}%"
             
-            # 显示路径（保留清理后的 ~ 格式）
-            display_path = cache_path.replace(os.path.expanduser("~"), "~") if cache_path else "N/A"
+            # 生成该 category 的所有 entries
+            entries_html = ""
+            for item in cat_data["entries"]:
+                entry = item["entry"]
+                cache_path = item["cache_path"]
+                hit_count = item["count"]
+                
+                status_class = "hit" if entry.get("cache_hit") else "miss"
+                status_text = "Cache HIT" if entry.get("cache_hit") else "Generated"
+                
+                # 展开 ~ 路径以便加载图片
+                expanded_path = os.path.expanduser(cache_path) if cache_path else ""
+                img_html = '<span class="no-image">No image</span>'
+                if expanded_path and os.path.exists(expanded_path):
+                    try:
+                        from PIL import Image
+                        with Image.open(expanded_path) as img:
+                            img.thumbnail((200, 200))
+                            buffer = BytesIO()
+                            img.save(buffer, format="PNG")
+                            img_b64 = base64.b64encode(buffer.getvalue()).decode()
+                            img_html = f'<img src="data:image/png;base64,{img_b64}" class="thumbnail">'
+                    except Exception:
+                        pass
+                
+                # 显示路径（保留清理后的 ~ 格式）
+                display_path = cache_path.replace(os.path.expanduser("~"), "~") if cache_path else "N/A"
+                
+                entries_html += f'''
+                <div class="prebaked-entry">
+                    <div class="entry-header">
+                        <span class="status {status_class}">{status_text}</span>
+                        <span class="hit-count">× {hit_count}</span>
+                        <span class="tool">{entry.get("tool_name", "unknown")}</span>
+                    </div>
+                    <div class="entry-content">
+                        <div class="image-container">{img_html}</div>
+                        <div class="details">
+                            <p><strong>CoMT ID:</strong> {entry.get("comt_sample_id", "N/A")}</p>
+                            <p><strong>Backend:</strong> {entry.get("fallback_backend", "")}:{entry.get("fallback_method", "")}</p>
+                            <p class="path"><strong>Path:</strong> <code>{display_path}</code></p>
+                        </div>
+                    </div>
+                </div>'''
             
-            entries_html += f'''
-            <div class="prebaked-entry">
-                <div class="entry-header">
-                    <span class="status {status_class}">{status_text}</span>
-                    <span class="hit-count">× {hit_count}</span>
-                    <span class="tool">{entry.get("tool_name", "unknown")}</span>
-                </div>
-                <div class="entry-content">
-                    <div class="image-container">{img_html}</div>
-                    <div class="details">
-                        <p><strong>Category:</strong> {entry.get("category", "N/A")}</p>
-                        <p><strong>CoMT ID:</strong> {entry.get("comt_sample_id", "N/A")}</p>
-                        <p><strong>Backend:</strong> {entry.get("fallback_backend", "")}:{entry.get("fallback_method", "")}</p>
-                        <p class="path"><strong>Path:</strong> <code>{display_path}</code></p>
+            # 生成该 category 的完整 section
+            category_sections_html += f'''
+            <div class="category-section">
+                <div class="category-header">
+                    <h3>{category}</h3>
+                    <div class="category-stats-inline">
+                        <span class="stat-item">Total: <strong>{total}</strong></span>
+                        <span class="stat-item">Hits: <strong>{hits}</strong></span>
+                        <span class="stat-item">Hit Rate: <strong>{cat_hit_rate:.1f}%</strong></span>
+                        <span class="stat-item">Attack Rate: <strong>{attack_rate_str}</strong></span>
                     </div>
                 </div>
+                <div class="category-entries">{entries_html}</div>
             </div>'''
         
         prebaked_html = f'''
@@ -741,7 +800,7 @@ def _generate_summary_html(
                 <div class="stat-card misses"><h3>{cache_misses}</h3><p>Generated</p></div>
                 <div class="stat-card rate"><h3>{hit_rate:.1f}%</h3><p>Hit Rate</p></div>
             </div>
-            <div class="prebaked-entries">{entries_html}</div>
+            <div class="category-sections">{category_sections_html}</div>
         </div>'''
     
     # 构建配置信息
@@ -815,6 +874,15 @@ def _generate_summary_html(
         .details .path {{ margin-top: 10px; }}
         .details .path code {{ background: rgba(0, 0, 0, 0.3); padding: 2px 6px; border-radius: 4px; font-family: 'Fira Code', monospace; font-size: 0.8em; word-break: break-all; }}
         .stop-reason {{ background: rgba(255, 107, 107, 0.2); color: #ff6b6b; padding: 10px 15px; border-radius: 8px; margin-top: 15px; }}
+        .category-sections {{ margin-top: 25px; }}
+        .category-section {{ background: rgba(0, 0, 0, 0.15); border-radius: 12px; margin-bottom: 20px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.08); }}
+        .category-header {{ background: rgba(0, 217, 255, 0.15); padding: 15px 20px; border-bottom: 2px solid rgba(0, 217, 255, 0.3); }}
+        .category-header h3 {{ color: #00d9ff; margin: 0 0 10px 0; font-size: 1.1em; }}
+        .category-stats-inline {{ display: flex; gap: 20px; flex-wrap: wrap; }}
+        .category-stats-inline .stat-item {{ font-size: 0.9em; color: #bbb; }}
+        .category-stats-inline .stat-item strong {{ color: #ffd93d; }}
+        .category-entries {{ padding: 15px; }}
+        .section h3 {{ color: #00d9ff; margin-top: 30px; margin-bottom: 15px; font-size: 1.1em; }}
     </style>
 </head>
 <body>

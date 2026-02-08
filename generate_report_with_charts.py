@@ -2,9 +2,27 @@
 生成包含图表的评估报告
 
 对每个模型系列，生成柱状图显示不同类别的攻击率
+
+支持新的输出格式：
+- job 文件夹: job_{job_num}_tasks_{num}_{provider}_{model}_{timestamp}/
+- batch 文件夹: batch_{batch_num}_{timestamp}/ 包含多个 job 文件夹
+
+用法:
+    # 为指定的 job 生成报告
+    python generate_report_with_charts.py --jobs 153 154 155
+    
+    # 为指定的 batch 生成报告
+    python generate_report_with_charts.py --batches 4
+    
+    # 同时指定 job 和 batch
+    python generate_report_with_charts.py --jobs 153 --batches 4 5
+    
+    # 使用旧格式的 CSV 文件
+    python generate_report_with_charts.py --files output/eval_*.csv
 """
 
 import os
+import re
 import csv
 import json
 from collections import defaultdict
@@ -50,6 +68,376 @@ CATEGORY_LABELS = [
     'Health',
     'Gov'
 ]
+
+# ============ 新的文件夹解析函数 ============
+
+def parse_job_folder_name(folder_name):
+    """
+    从 job 文件夹名称解析信息
+    格式: job_{job_num}_tasks_{num}_{provider}_{model}_{timestamp}
+    例如: job_154_tasks_202_Openrouter_qwen_qwen3-vl-235b-a22b-instruct_0123_222923
+    
+    Returns:
+        dict: {job_num, tasks, provider, model, timestamp} 或 None 如果解析失败
+    """
+    # 匹配模式: job_数字_tasks_数字_提供者_模型_时间戳
+    pattern = r'^job_(\d+)_tasks_(\d+)_([^_]+)_(.+)_(\d{4}_\d{6})$'
+    match = re.match(pattern, folder_name)
+    
+    if match:
+        return {
+            'job_num': int(match.group(1)),
+            'tasks': int(match.group(2)),
+            'provider': match.group(3),
+            'model': match.group(4),
+            'timestamp': match.group(5)
+        }
+    return None
+
+
+def parse_batch_folder_name(folder_name):
+    """
+    从 batch 文件夹名称解析信息
+    格式: batch_{batch_num}_{timestamp}
+    例如: batch_4_0123_222923
+    
+    Returns:
+        dict: {batch_num, timestamp} 或 None 如果解析失败
+    """
+    pattern = r'^batch_(\d+)_(\d{4}_\d{6})$'
+    match = re.match(pattern, folder_name)
+    
+    if match:
+        return {
+            'batch_num': int(match.group(1)),
+            'timestamp': match.group(2)
+        }
+    return None
+
+
+def find_job_folders(output_dir='output', job_nums=None):
+    """
+    查找 job 文件夹
+    
+    Args:
+        output_dir: 输出目录
+        job_nums: 指定的 job 编号列表，None 表示查找所有
+        
+    Returns:
+        list: [(folder_path, job_info), ...]
+    """
+    job_folders = []
+    
+    if not os.path.exists(output_dir):
+        return job_folders
+    
+    for item in os.listdir(output_dir):
+        item_path = os.path.join(output_dir, item)
+        if not os.path.isdir(item_path):
+            continue
+        
+        # 解析 job 文件夹
+        job_info = parse_job_folder_name(item)
+        if job_info:
+            # 检查是否有 eval.csv
+            eval_csv = os.path.join(item_path, 'eval.csv')
+            if os.path.exists(eval_csv):
+                if job_nums is None or job_info['job_num'] in job_nums:
+                    job_folders.append((item_path, job_info))
+    
+    return job_folders
+
+
+def find_batch_folders(output_dir='output', batch_nums=None):
+    """
+    查找 batch 文件夹
+    
+    Args:
+        output_dir: 输出目录
+        batch_nums: 指定的 batch 编号列表，None 表示查找所有
+        
+    Returns:
+        list: [(folder_path, batch_info), ...]
+    """
+    batch_folders = []
+    
+    if not os.path.exists(output_dir):
+        return batch_folders
+    
+    for item in os.listdir(output_dir):
+        item_path = os.path.join(output_dir, item)
+        if not os.path.isdir(item_path):
+            continue
+        
+        # 解析 batch 文件夹
+        batch_info = parse_batch_folder_name(item)
+        if batch_info:
+            if batch_nums is None or batch_info['batch_num'] in batch_nums:
+                batch_folders.append((item_path, batch_info))
+    
+    return batch_folders
+
+
+def find_jobs_in_batch(batch_folder):
+    """
+    查找 batch 文件夹内的所有 job 文件夹
+    
+    Args:
+        batch_folder: batch 文件夹路径
+        
+    Returns:
+        list: [(folder_path, job_info), ...]
+    """
+    job_folders = []
+    
+    for item in os.listdir(batch_folder):
+        item_path = os.path.join(batch_folder, item)
+        if not os.path.isdir(item_path):
+            continue
+        
+        job_info = parse_job_folder_name(item)
+        if job_info:
+            eval_csv = os.path.join(item_path, 'eval.csv')
+            if os.path.exists(eval_csv):
+                job_folders.append((item_path, job_info))
+    
+    return job_folders
+
+
+def get_postproc_info_from_job(job_folder):
+    """
+    从 job 文件夹中读取后处理信息
+    
+    Args:
+        job_folder: job 文件夹路径
+        
+    Returns:
+        dict: {fallback_backend, fallback_method} 或 None
+    """
+    prebaked_file = os.path.join(job_folder, 'prebaked_report_data.json')
+    
+    if not os.path.exists(prebaked_file):
+        return None
+    
+    try:
+        with open(prebaked_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        if not data or not isinstance(data, list) or len(data) == 0:
+            return None
+        
+        # 取第一条记录的后处理信息（假设整个 job 使用相同的后处理配置）
+        first_record = data[0]
+        return {
+            'fallback_backend': first_record.get('fallback_backend'),
+            'fallback_method': first_record.get('fallback_method'),
+            'comt_sample_id': first_record.get('comt_sample_id')
+        }
+    except Exception as e:
+        print(f"⚠️  读取后处理信息失败 {prebaked_file}: {e}")
+        return None
+
+
+def format_postproc_suffix(postproc_info):
+    """
+    格式化后处理后缀
+    
+    Args:
+        postproc_info: {fallback_backend, fallback_method} 或 None
+        
+    Returns:
+        str: 后处理后缀，如 "(visual_mask)" 或 "(sd-good)"
+    """
+    if not postproc_info:
+        return ""
+    
+    backend = postproc_info.get('fallback_backend')
+    method = postproc_info.get('fallback_method')
+    
+    if not backend or not method:
+        return ""
+    
+    # 格式化后缀
+    if backend == 'ask':
+        # ask backend 直接使用 method 名称
+        return f" ({method})"
+    elif backend == 'sd':
+        # sd backend 使用 sd-method 格式
+        return f" (sd-{method})"
+    else:
+        return f" ({backend}-{method})"
+
+
+def parse_model_info_from_job(job_info, job_folder=None):
+    """
+    从 job_info 中提取模型显示名称和品牌
+    
+    Args:
+        job_info: parse_job_folder_name 返回的字典
+        job_folder: job 文件夹路径（用于读取后处理信息）
+        
+    Returns:
+        (brand, model_display_name)
+    """
+    provider = job_info['provider'].lower()
+    model = job_info['model'].lower()
+    
+    # 检查是否是 CoMT/VSP 或普通请求
+    is_comt_vsp = 'comtvsp' in provider or provider == 'comt_vsp'
+    is_vsp = 'vsp' in provider and not is_comt_vsp
+    
+    # 获取后处理信息
+    postproc_info = None
+    if job_folder and is_comt_vsp:
+        postproc_info = get_postproc_info_from_job(job_folder)
+    
+    # 构建 VSP 后缀
+    postproc_suffix = format_postproc_suffix(postproc_info)
+    vsp_suffix = ' + CoMT/VSP' + postproc_suffix if is_comt_vsp else (' + VSP' if is_vsp else '')
+    
+    # 根据模型名称确定品牌和显示名称
+    if 'gemini' in model:
+        brand = 'Gemini'
+        if '2.5-flash' in model or '2-5-flash' in model:
+            model_display_name = 'Gemini-2.5-Flash' + vsp_suffix
+        elif '2.0-flash' in model or '2-0-flash' in model:
+            model_display_name = 'Gemini-2.0-Flash' + vsp_suffix
+        else:
+            model_display_name = 'Gemini' + vsp_suffix
+    
+    elif 'gpt-5' in model or 'gpt5' in model:
+        brand = 'OpenAI'
+        model_display_name = 'GPT-5' + vsp_suffix
+    
+    elif 'gpt-4' in model or 'gpt4' in model:
+        brand = 'OpenAI'
+        if 'vision' in model or 'turbo' in model:
+            model_display_name = 'GPT-4-Vision' + vsp_suffix
+        else:
+            model_display_name = 'GPT-4' + vsp_suffix
+    
+    elif 'qwen' in model:
+        # 检查是否是 Thinking 模式
+        is_thinking = 'thinking' in model
+        
+        if is_thinking:
+            brand = 'Qwen (Thinking)'
+        else:
+            brand = 'Qwen'
+        
+        # 区分不同的 Qwen 模型
+        if 'qwen3-vl-235b' in model:
+            base_name = 'Qwen3-VL-235B-Thinking' if is_thinking else 'Qwen3-VL-235B-Instruct'
+        elif 'qwen3-vl-30b' in model:
+            base_name = 'Qwen3-VL-30B-Thinking' if is_thinking else 'Qwen3-VL-30B-Instruct'
+        elif 'qwen3-vl-8b' in model:
+            base_name = 'Qwen3-VL-8B-Thinking' if is_thinking else 'Qwen3-VL-8B-Instruct'
+        elif 'qwen2.5-vl' in model or 'qwen2-5-vl' in model:
+            if '72b' in model:
+                base_name = 'Qwen2.5-VL-72B'
+            elif '7b' in model:
+                base_name = 'Qwen2.5-VL-7B'
+            else:
+                base_name = 'Qwen2.5-VL'
+        else:
+            base_name = 'Qwen-VL (Unknown)'
+        
+        model_display_name = base_name + vsp_suffix
+    
+    elif 'internvl' in model:
+        brand = 'InternVL'
+        if '78b' in model:
+            model_display_name = 'InternVL3-78B' + vsp_suffix
+        elif '38b' in model:
+            model_display_name = 'InternVL3-38B' + vsp_suffix
+        else:
+            model_display_name = 'InternVL' + vsp_suffix
+    
+    elif 'mistral' in model or 'ministral' in model:
+        brand = 'Mistral'
+        if 'ministral-14b' in model:
+            model_display_name = 'Ministral-14B' + vsp_suffix
+        elif 'ministral-8b' in model:
+            model_display_name = 'Ministral-8B' + vsp_suffix
+        else:
+            model_display_name = 'Mistral' + vsp_suffix
+    
+    elif 'claude' in model:
+        brand = 'Anthropic'
+        if 'claude-3' in model:
+            if 'opus' in model:
+                model_display_name = 'Claude-3-Opus' + vsp_suffix
+            elif 'sonnet' in model:
+                model_display_name = 'Claude-3-Sonnet' + vsp_suffix
+            elif 'haiku' in model:
+                model_display_name = 'Claude-3-Haiku' + vsp_suffix
+            else:
+                model_display_name = 'Claude-3' + vsp_suffix
+        else:
+            model_display_name = 'Claude' + vsp_suffix
+    
+    elif 'llama' in model:
+        brand = 'Meta'
+        if '3.2' in model or '3-2' in model:
+            if '90b' in model:
+                model_display_name = 'Llama-3.2-90B' + vsp_suffix
+            elif '11b' in model:
+                model_display_name = 'Llama-3.2-11B' + vsp_suffix
+            else:
+                model_display_name = 'Llama-3.2' + vsp_suffix
+        else:
+            model_display_name = 'Llama' + vsp_suffix
+    
+    else:
+        brand = 'Other'
+        # 清理模型名称作为显示名
+        clean_model = job_info['model'].replace('_', '-').replace('/', '-')
+        model_display_name = clean_model + vsp_suffix
+    
+    return brand, model_display_name
+
+
+def load_data_from_jobs(job_folders):
+    """
+    从 job 文件夹列表加载评估数据
+    
+    Args:
+        job_folders: [(folder_path, job_info), ...]
+        
+    Returns:
+        all_data: {brand: [{model_display_name, timestamp, data, stats, filename, job_info}, ...]}
+    """
+    all_data = defaultdict(list)
+    
+    for folder_path, job_info in job_folders:
+        eval_csv = os.path.join(folder_path, 'eval.csv')
+        
+        if not os.path.exists(eval_csv):
+            print(f"⚠️  eval.csv 不存在: {folder_path}")
+            continue
+        
+        # 读取 CSV 数据
+        attack_rates, stats = read_csv_file(eval_csv)
+        
+        if not attack_rates:
+            print(f"⚠️  无法读取数据: {eval_csv}")
+            continue
+        
+        # 从 job_info 中提取模型信息（传入 folder_path 以读取后处理信息）
+        brand, model_display_name = parse_model_info_from_job(job_info, job_folder=folder_path)
+        
+        all_data[brand].append({
+            'model_display_name': model_display_name,
+            'timestamp': job_info['timestamp'],
+            'data': attack_rates,
+            'stats': stats,
+            'filename': os.path.basename(folder_path),
+            'job_info': job_info,
+            'folder_path': folder_path
+        })
+    
+    return all_data
+
 
 def read_csv_file(filepath):
     """
@@ -1094,38 +1482,17 @@ def load_specific_data(eval_files: list):
     return all_data
 
 
-def main(eval_files: list = None, output_file: str = None):
+def generate_report_to_folder(all_data, report_dir, report_title="MM-SafetyBench Evaluation Report"):
     """
-    主函数
+    生成报告到指定目录
     
     Args:
-        eval_files: 指定的评估文件列表，如果为 None 则使用默认逻辑加载所有符合条件的文件
-        output_file: 输出报告文件路径，如果为 None 则使用默认路径
+        all_data: {brand: [{model_display_name, timestamp, data, stats, ...}, ...]}
+        report_dir: 报告输出目录
+        report_title: 报告标题
     """
-    print("📊 开始生成评估报告...\n")
-    
-    # 加载数据
-    print("📖 加载评估数据...")
-    if eval_files:
-        print(f"   指定了 {len(eval_files)} 个评估文件")
-        all_data = load_specific_data(eval_files)
-    else:
-        all_data = load_all_data()
-    
-    if not all_data:
-        print("⚠️  没有找到有效的评估数据")
-        return
-    
-    print(f"✅ 找到 {len(all_data)} 个品牌")
-    total_models = sum(len(models) for models in all_data.values())
-    for brand, models in all_data.items():
-        print(f"  - {brand}: {len(models)} 个模型")
-    
-    # 创建报告目录
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    report_dir = f'output/reports/models_{total_models}_{timestamp}'
     os.makedirs(report_dir, exist_ok=True)
-    print(f"\n📁 创建报告目录: {report_dir}")
+    print(f"\n📁 报告目录: {report_dir}")
     
     print("\n🎨 生成图表和报告...")
     
@@ -1179,7 +1546,7 @@ def main(eval_files: list = None, output_file: str = None):
             chart_file
         )
     
-    # 4. 生成品牌分组图表（修改路径到report_dir）
+    # 4. 生成品牌分组图表
     for i, (brand, models_data) in enumerate(sorted(all_data.items()), 1):
         safe_brand = brand.replace(" ", "_").replace("+", "")
         averaged_data, tested_categories, averaged_stats = average_multiple_runs(models_data)
@@ -1195,10 +1562,159 @@ def main(eval_files: list = None, output_file: str = None):
     report_output = f'{report_dir}/evaluation_report.html'
     generate_html_report(all_data, output_file=report_output)
     
+    return report_output
+
+
+def main(eval_files: list = None, output_file: str = None, 
+         job_nums: list = None, batch_nums: list = None,
+         output_dir: str = 'output'):
+    """
+    主函数
+    
+    Args:
+        eval_files: 指定的评估文件列表（旧格式，CSV 文件路径）
+        output_file: 输出报告文件路径（仅用于旧格式）
+        job_nums: 指定的 job 编号列表
+        batch_nums: 指定的 batch 编号列表
+        output_dir: 输出基础目录，默认 'output'
+    """
+    print("📊 开始生成评估报告...\n")
+    
+    # 收集所有 job 文件夹
+    all_job_folders = []
+    target_batch_folders = []  # 用于保存目标 batch 文件夹（用于输出报告）
+    
+    # 1. 如果指定了 batch_nums，从 batch 文件夹中查找 jobs
+    if batch_nums:
+        print(f"📦 查找 batch: {batch_nums}")
+        batch_folders = find_batch_folders(output_dir, batch_nums)
+        
+        for batch_folder, batch_info in batch_folders:
+            print(f"  ✅ 找到 batch_{batch_info['batch_num']}: {batch_folder}")
+            target_batch_folders.append((batch_folder, batch_info))
+            
+            # 查找 batch 内的所有 job
+            jobs_in_batch = find_jobs_in_batch(batch_folder)
+            print(f"     包含 {len(jobs_in_batch)} 个 jobs")
+            all_job_folders.extend(jobs_in_batch)
+    
+    # 2. 如果指定了 job_nums，直接查找 job 文件夹
+    if job_nums:
+        print(f"📋 查找 jobs: {job_nums}")
+        
+        # 先从顶层 output 目录查找
+        top_level_jobs = find_job_folders(output_dir, job_nums)
+        for folder, info in top_level_jobs:
+            print(f"  ✅ 找到 job_{info['job_num']}: {folder}")
+        all_job_folders.extend(top_level_jobs)
+        
+        # 再从所有 batch 文件夹中查找（可能 job 在某个 batch 内）
+        all_batches = find_batch_folders(output_dir)
+        for batch_folder, _ in all_batches:
+            jobs_in_batch = find_jobs_in_batch(batch_folder)
+            for folder, info in jobs_in_batch:
+                if info['job_num'] in job_nums:
+                    # 检查是否已经添加过
+                    if not any(f[1]['job_num'] == info['job_num'] for f in all_job_folders):
+                        print(f"  ✅ 找到 job_{info['job_num']} (在 batch 中): {folder}")
+                        all_job_folders.append((folder, info))
+    
+    # 3. 如果指定了 eval_files（旧格式），使用旧的加载逻辑
+    if eval_files:
+        print(f"📄 加载指定的 CSV 文件: {len(eval_files)} 个")
+        all_data = load_specific_data(eval_files)
+        
+        if all_data:
+            # 使用旧格式的输出目录
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            total_models = sum(len(models) for models in all_data.values())
+            report_dir = f'{output_dir}/reports/models_{total_models}_{timestamp}'
+            
+            report_output = generate_report_to_folder(all_data, report_dir)
+            print_completion_summary(all_data, report_dir, report_output)
+        else:
+            print("⚠️  没有找到有效的评估数据")
+        return
+    
+    # 4. 如果没有指定任何参数，使用旧的加载逻辑（load_all_data）
+    if not job_nums and not batch_nums:
+        print("📖 使用默认逻辑加载所有评估数据...")
+        all_data = load_all_data()
+        
+        if all_data:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            total_models = sum(len(models) for models in all_data.values())
+            report_dir = f'{output_dir}/reports/models_{total_models}_{timestamp}'
+            
+            report_output = generate_report_to_folder(all_data, report_dir)
+            print_completion_summary(all_data, report_dir, report_output)
+        else:
+            print("⚠️  没有找到有效的评估数据")
+        return
+    
+    # 5. 从 job 文件夹加载数据
+    if not all_job_folders:
+        print("⚠️  没有找到匹配的 job 文件夹")
+        return
+    
+    # 去重（按 job_num）
+    unique_jobs = {}
+    for folder, info in all_job_folders:
+        job_num = info['job_num']
+        if job_num not in unique_jobs:
+            unique_jobs[job_num] = (folder, info)
+    all_job_folders = list(unique_jobs.values())
+    
+    print(f"\n📖 加载 {len(all_job_folders)} 个 job 的数据...")
+    all_data = load_data_from_jobs(all_job_folders)
+    
+    if not all_data:
+        print("⚠️  没有找到有效的评估数据")
+        return
+    
+    print(f"✅ 找到 {len(all_data)} 个品牌")
+    total_models = sum(len(models) for models in all_data.values())
+    for brand, models in all_data.items():
+        print(f"  - {brand}: {len(models)} 个模型/运行")
+    
+    # 6. 确定报告输出目录
+    if len(target_batch_folders) == 1:
+        # 如果只有一个 batch，输出到 batch 文件夹内
+        batch_folder, batch_info = target_batch_folders[0]
+        report_dir = os.path.join(batch_folder, 'report')
+        report_title = f"Batch #{batch_info['batch_num']} Evaluation Report"
+    elif len(target_batch_folders) > 1:
+        # 如果有多个 batch，创建一个新的报告目录
+        batch_nums_str = '_'.join(str(b[1]['batch_num']) for b in target_batch_folders)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        report_dir = f'{output_dir}/reports/batches_{batch_nums_str}_{timestamp}'
+        report_title = f"Batches {batch_nums_str} Evaluation Report"
+    elif job_nums and len(all_job_folders) == 1:
+        # 如果只指定了一个 job，输出到 job 文件夹内
+        job_folder = all_job_folders[0][0]
+        report_dir = os.path.join(job_folder, 'report')
+        report_title = f"Job #{all_job_folders[0][1]['job_num']} Evaluation Report"
+    else:
+        # 多个 job 或混合情况，创建新的报告目录
+        job_nums_str = '_'.join(str(f[1]['job_num']) for f in all_job_folders[:5])
+        if len(all_job_folders) > 5:
+            job_nums_str += f'_plus{len(all_job_folders)-5}more'
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        report_dir = f'{output_dir}/reports/jobs_{job_nums_str}_{timestamp}'
+        report_title = f"Jobs Evaluation Report"
+    
+    # 7. 生成报告
+    report_output = generate_report_to_folder(all_data, report_dir, report_title)
+    print_completion_summary(all_data, report_dir, report_output)
+
+
+def print_completion_summary(all_data, report_dir, report_output):
+    """打印完成摘要"""
     print("\n🎉 完成！")
     print(f"📁 报告目录: {report_dir}/")
     print(f"📄 HTML 报告: {report_output}")
-    print(f"🖼️  图表总数: {10 + 2 + 13 + len(all_data)*2} 张")
+    total_charts = 2 + 13 + len(all_data) * 2  # 全局图 + 类别图 + 品牌图
+    print(f"🖼️  图表总数: {total_charts} 张")
     print(f"   - 品牌分组图表: {len(all_data)*2} 张")
     print(f"   - 全局总攻击率图: 2 张")
     print(f"   - 类别对比图: 13 张")
@@ -1207,13 +1723,40 @@ def main(eval_files: list = None, output_file: str = None):
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="生成包含图表的评估报告")
+    parser = argparse.ArgumentParser(
+        description="生成包含图表的评估报告",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  # 为指定的 batch 生成报告（报告输出到 batch 文件夹内）
+  python generate_report_with_charts.py --batches 4
+  
+  # 为多个 batch 生成报告
+  python generate_report_with_charts.py --batches 3 4
+  
+  # 为指定的 job 生成报告
+  python generate_report_with_charts.py --jobs 153 154 155
+  
+  # 同时指定 job 和 batch
+  python generate_report_with_charts.py --jobs 153 --batches 4
+  
+  # 使用旧格式的 CSV 文件
+  python generate_report_with_charts.py --files output/eval_*.csv
+        """
+    )
+    parser.add_argument("--jobs", nargs='+', type=int, default=None,
+                       help="指定要处理的 job 编号列表")
+    parser.add_argument("--batches", nargs='+', type=int, default=None,
+                       help="指定要处理的 batch 编号列表")
     parser.add_argument("--files", nargs='+', default=None,
-                       help="指定要处理的评估 CSV 文件列表。不指定则使用默认逻辑加载所有符合条件的文件")
-    parser.add_argument("--output", default=None,
-                       help="输出报告文件路径（默认: output/evaluation_report.html）")
+                       help="指定要处理的评估 CSV 文件列表（旧格式）")
+    parser.add_argument("--output-dir", default='output',
+                       help="输出基础目录（默认: output）")
     
     args = parser.parse_args()
     
-    main(eval_files=args.files, output_file=args.output)
+    main(eval_files=args.files, 
+         job_nums=args.jobs, 
+         batch_nums=args.batches,
+         output_dir=args.output_dir)
 

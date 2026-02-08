@@ -132,12 +132,14 @@ def close_logging():
 # - 列表：需要遍历的参数变体
 args_combo = [
     # 固定参数：类别和任务数
-    "--model 'qwen/qwen3-vl-235b-a22b-instruct' --max_tasks 2",
+    "--model 'qwen/qwen3-vl-235b-a22b-instruct'  --sampling_rate 0.12",
     
     # 需要遍历的参数变体：不同的 provider 和 model 组合
     [
         '--provider openrouter',
         '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback ask --vsp_postproc_method visual_mask',
+        '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method good --vsp_postproc_sd_prompt "remove the boxed objects"',
+        '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method bad --vsp_postproc_sd_prompt "remove the boxed objects"',
     ],
 ]
 
@@ -167,13 +169,18 @@ class RunResult:
     vsp_dir: Optional[str] = None           # VSP 详细输出目录
     summary_file: Optional[str] = None      # summary.html 路径
     error_message: Optional[str] = None     # 错误信息
-    error_key: Optional[str] = None         # 错误标识（如 "stop_reason" 表示 request.py 内部自动停止）
-    
-    # 从参数中提取的信息
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    categories: Optional[str] = None
-    max_tasks_arg: Optional[int] = None
+    error_key: Optional[str] = None         # 错误类型键
+    provider: Optional[str] = None          # Provider
+    model: Optional[str] = None             # Model
+    categories: Optional[str] = None        # Categories
+    max_tasks_arg: Optional[int] = None     # Max tasks argument
+    # VSP Postproc 相关参数
+    vsp_postproc: Optional[bool] = None     # 是否启用 vsp_postproc
+    vsp_postproc_backend: Optional[str] = None      # postproc backend (prebaked/sd)
+    vsp_postproc_fallback: Optional[str] = None     # fallback method (ask/sd)
+    vsp_postproc_method: Optional[str] = None       # postproc method (visual_mask/good/bad)
+    vsp_postproc_sd_prompt: Optional[str] = None    # SD prompt
+    comt_sample_id: Optional[str] = None    # COMT sample ID
 
 
 def parse_args_str(args_str: str) -> dict:
@@ -199,6 +206,35 @@ def parse_args_str(args_str: str) -> dict:
     max_tasks_match = re.search(r'--max_tasks\s+(\d+)', args_str)
     if max_tasks_match:
         info['max_tasks_arg'] = int(max_tasks_match.group(1))
+    
+    # 提取 VSP Postproc 相关参数
+    if '--vsp_postproc' in args_str:
+        info['vsp_postproc'] = True
+        
+        # 提取 backend
+        backend_match = re.search(r'--vsp_postproc_backend\s+(\S+)', args_str)
+        if backend_match:
+            info['vsp_postproc_backend'] = backend_match.group(1)
+        
+        # 提取 fallback
+        fallback_match = re.search(r'--vsp_postproc_fallback\s+(\S+)', args_str)
+        if fallback_match:
+            info['vsp_postproc_fallback'] = fallback_match.group(1)
+        
+        # 提取 method
+        method_match = re.search(r'--vsp_postproc_method\s+(\S+)', args_str)
+        if method_match:
+            info['vsp_postproc_method'] = method_match.group(1)
+        
+        # 提取 SD prompt（可能带引号）
+        sd_prompt_match = re.search(r'--vsp_postproc_sd_prompt\s+["\']([^"\']+)["\']', args_str)
+        if sd_prompt_match:
+            info['vsp_postproc_sd_prompt'] = sd_prompt_match.group(1)
+    
+    # 提取 comt_sample_id
+    comt_sample_id_match = re.search(r'--comt_sample_id\s+(\S+)', args_str)
+    if comt_sample_id_match:
+        info['comt_sample_id'] = comt_sample_id_match.group(1)
     
     return info
 
@@ -403,6 +439,12 @@ def run_request(args_str: str, run_index: int, total_runs: int) -> RunResult:
             model=args_info.get('model'),
             categories=args_info.get('categories'),
             max_tasks_arg=args_info.get('max_tasks_arg'),
+            vsp_postproc=args_info.get('vsp_postproc'),
+            vsp_postproc_backend=args_info.get('vsp_postproc_backend'),
+            vsp_postproc_fallback=args_info.get('vsp_postproc_fallback'),
+            vsp_postproc_method=args_info.get('vsp_postproc_method'),
+            vsp_postproc_sd_prompt=args_info.get('vsp_postproc_sd_prompt'),
+            comt_sample_id=args_info.get('comt_sample_id'),
         )
         
     except Exception as e:
@@ -424,6 +466,12 @@ def run_request(args_str: str, run_index: int, total_runs: int) -> RunResult:
             model=args_info.get('model'),
             categories=args_info.get('categories'),
             max_tasks_arg=args_info.get('max_tasks_arg'),
+            vsp_postproc=args_info.get('vsp_postproc'),
+            vsp_postproc_backend=args_info.get('vsp_postproc_backend'),
+            vsp_postproc_fallback=args_info.get('vsp_postproc_fallback'),
+            vsp_postproc_method=args_info.get('vsp_postproc_method'),
+            vsp_postproc_sd_prompt=args_info.get('vsp_postproc_sd_prompt'),
+            comt_sample_id=args_info.get('comt_sample_id'),
         )
 
 
@@ -505,6 +553,24 @@ def generate_batch_summary_html(
             rel_path = os.path.basename(r.job_folder) + "/summary.html" if r.job_folder else ""
             summary_link = f'<a href="{rel_path}" class="summary-link">查看详情</a>'
         
+        # 构建 VSP Postproc 信息
+        vsp_postproc_info = ""
+        if r.vsp_postproc:
+            parts = []
+            if r.vsp_postproc_method:
+                parts.append(f"<span class='vsp-method'>{r.vsp_postproc_method}</span>")
+            if r.vsp_postproc_backend:
+                parts.append(f"backend: {r.vsp_postproc_backend}")
+            if r.vsp_postproc_fallback:
+                parts.append(f"fallback: {r.vsp_postproc_fallback}")
+            if r.comt_sample_id:
+                parts.append(f"id: {r.comt_sample_id}")
+            if r.vsp_postproc_sd_prompt:
+                parts.append(f'prompt: "{r.vsp_postproc_sd_prompt}"')
+            vsp_postproc_info = "<br>".join(parts) if parts else "✓"
+        else:
+            vsp_postproc_info = "-"
+        
         jobs_html += f'''
         <tr class="{status_class}">
             <td>{r.run_index}</td>
@@ -512,6 +578,7 @@ def generate_batch_summary_html(
             <td>{r.provider or "N/A"}</td>
             <td class="model-cell">{r.model or "N/A"}</td>
             <td>{r.total_tasks or "N/A"}</td>
+            <td class="vsp-postproc-cell">{vsp_postproc_info}</td>
             <td>{format_duration(r.duration)}</td>
             <td><span class="status-badge {status_class}">{status_text}</span></td>
             <td>{summary_link}</td>
@@ -544,6 +611,8 @@ def generate_batch_summary_html(
         tr:hover {{ background: rgba(255, 255, 255, 0.05); }}
         tr.failed {{ background: rgba(255, 107, 107, 0.1); }}
         .model-cell {{ max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .vsp-postproc-cell {{ font-size: 0.85em; color: #bbb; line-height: 1.6; max-width: 350px; }}
+        .vsp-method {{ background: rgba(138, 43, 226, 0.3); color: #da70d6; padding: 2px 8px; border-radius: 8px; font-weight: bold; display: inline-block; margin-bottom: 2px; }}
         .status-badge {{ padding: 4px 10px; border-radius: 12px; font-size: 0.85em; font-weight: bold; }}
         .status-badge.success {{ background: rgba(0, 255, 136, 0.2); color: #00ff88; }}
         .status-badge.failed {{ background: rgba(255, 107, 107, 0.2); color: #ff6b6b; }}
@@ -590,6 +659,7 @@ def generate_batch_summary_html(
                         <th>Provider</th>
                         <th>Model</th>
                         <th>Tasks</th>
+                        <th>VSP Postproc</th>
                         <th>Duration</th>
                         <th>Status</th>
                         <th>Details</th>
@@ -719,13 +789,14 @@ def print_results_summary(results: List[RunResult], batch_start: datetime, batch
     print(f"{'='*100}\n")
 
 
-def generate_batch_report(results: List[RunResult], batch_folder: str):
+def generate_batch_report(results: List[RunResult], batch_folder: str, batch_num: int):
     """
     调用 generate_report_with_charts.py 生成批量结果报告
     
     Args:
         results: 所有运行结果列表
         batch_folder: batch 文件夹路径
+        batch_num: batch 编号
     """
     # 收集所有成功的 eval 文件
     eval_files = [r.eval_file for r in results if r.success and r.eval_file]
@@ -747,12 +818,9 @@ def generate_batch_report(results: List[RunResult], batch_folder: str):
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
         
-        # 输出到 batch 文件夹
-        report_output = os.path.join(batch_folder, "evaluation_report.html")
-        
-        # 构建命令，传递指定的评估文件
-        files_arg = ' '.join(f'"{f}"' for f in eval_files)
-        cmd = f'python generate_report_with_charts.py --files {files_arg} --output "{report_output}"'
+        # 使用新的 --batches 参数，让 generate_report_with_charts.py 自动处理输出路径
+        # 报告会生成在 batch_folder/report/ 目录下
+        cmd = f'python3 generate_report_with_charts.py --batches {batch_num}'
         
         process = subprocess.Popen(
             cmd,
@@ -772,8 +840,13 @@ def generate_batch_report(results: List[RunResult], batch_folder: str):
         process.wait()
         
         if process.returncode == 0:
+            # 报告会生成在 batch_folder/report/ 目录下
+            report_output = os.path.join(batch_folder, "report", "evaluation_report.html")
             print(f"\n✅ 图表报告生成完成")
-            print(f"📄 HTML 报告: {report_output}")
+            if os.path.exists(report_output):
+                print(f"📄 HTML 报告: {report_output}")
+            else:
+                print(f"📁 报告目录: {os.path.join(batch_folder, 'report')}")
         else:
             print(f"\n⚠️  图表报告生成失败，退出码: {process.returncode}")
             
@@ -843,7 +916,7 @@ def main():
         
         # 生成批量结果报告（带图表的 evaluation_report.html）
         if GENERATE_REPORT:
-            generate_batch_report(results, batch_folder)
+            generate_batch_report(results, batch_folder, batch_num)
         
         # 关闭日志文件
         close_logging()
