@@ -275,6 +275,15 @@ class VSPProvider(BaseProvider):
                 job_folder = os.path.abspath(job_folder)
             env["VSP_JOB_FOLDER"] = job_folder
         
+        # Pass custom LLM endpoint config to VSP subprocess
+        if cfg and getattr(cfg, 'llm_base_url', None):
+            env["LLM_BASE_URL"] = cfg.llm_base_url
+        if cfg and getattr(cfg, 'llm_api_key', None):
+            env["LLM_API_KEY"] = cfg.llm_api_key
+        elif cfg and getattr(cfg, 'llm_base_url', None):
+            # AutoGen/OpenAI SDK requires a non-empty api_key even if the server ignores it
+            env["LLM_API_KEY"] = "not-needed"
+
         # 传递 prebaked processor 需要的上下文信息
         if meta:
             env["VSP_MMSB_CATEGORY"] = meta.get("category", "")

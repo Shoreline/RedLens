@@ -6,64 +6,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Mediator is a Python framework for inference and evaluation on the MM-SafetyBench multimodal safety dataset. It sends questions with images to LLMs, collects responses, then uses a GPT judge to evaluate whether responses are safe or unsafe, computing attack rates by category.
 
-## Commands
+## Quick Commands
 
-### Setup
 ```bash
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-```
+# Setup
+python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
 
-### Running Inference
-```bash
-# Quick test (10 samples, default provider/model)
+# Quick test
 python request.py --max_tasks 10
 
 # Full run with specific provider
-python request.py --provider openai --model "gpt-4o" --max_tasks 50
+python request.py --provider openrouter --model "qwen/qwen3-vl-235b-a22b-instruct" --max_tasks 50
 
-# Skip evaluation step
-python request.py --max_tasks 10 --skip_eval
-
-# VSP provider (local multimodal tool, use lower concurrency)
+# VSP provider (use lower concurrency)
 python request.py --provider vsp --consumers 3 --max_tasks 50
 
 # CoMT-VSP dual-task mode
 python request.py --provider comt_vsp --comt_sample_id "deletion-0107" --max_tasks 20
-```
 
-### Running Evaluation Separately
-```bash
+# Evaluation only
 python mmsb_eval.py --jsonl_file output/job_*/results.jsonl
-```
 
-### Batch Runs (parameter combinations)
-```bash
+# Batch runs / Report
 python batch_request.py
-```
-
-### Report Generation
-```bash
 python generate_report_with_charts.py
-```
 
-### Running Tests
-```bash
-# Single test
-python tests/test_failed_answer_detection.py
-
-# All tests (if pytest installed)
+# Tests
 python -m pytest tests/
-
-# Or without pytest
-for test in tests/test_*.py; do python "$test"; done
 ```
+
+完整参数参考见 docs/cli_reference.md。
 
 ## Architecture
 
 ### Pipeline Flow
 
-`request.py` orchestrates a three-stage pipeline: **Request** (call LLM) → **Eval** (GPT safety judge via `mmsb_eval.py`) → **Metrics** (attack rates by category). By default all three run automatically; use `--skip_eval` to only generate answers.
+`request.py` orchestrates a three-stage pipeline: **Request** (call LLM) → **Eval** (GPT safety judge via `mmsb_eval.py`) → **Metrics** (attack rates by category). Use `--skip_eval` to only generate answers.
 
 ### Provider System (`provider.py`)
 
@@ -74,15 +52,22 @@ for test in tests/test_*.py; do python "$test"; done
 - **VSPProvider** — spawns VisualSketchpad as subprocess, extracts answers from debug logs
 - **ComtVspProvider** — dual-task VSP (CoMT object detection + safety evaluation)
 
-Provider is selected via `--provider` flag; factory function `get_provider()` instantiates it.
+Provider is selected via `--provider` flag; factory function `get_provider()` instantiates it. Also supports custom LLM endpoints via `--llm_base_url` / `--llm_api_key`.
 
 ### Request Processing (`request.py`)
 
-Uses async producer-consumer pattern with configurable `--consumers` count. Items are loaded from MM-SafetyBench JSON files, images encoded to base64, then queued for concurrent LLM calls. Includes failure detection (regex-based) with auto-retry.
+Uses async producer-consumer pattern with configurable `--consumers` count. Items are loaded from MM-SafetyBench JSON files, images encoded to base64, then queued for concurrent LLM calls. Includes failure detection (regex-based) with auto-retry. Supports `--sampling_rate` for partial dataset runs and `--rate_limit_qps` for rate limiting.
+
+### VSP Post-Processor
+
+VSP 推理完成后可启用后处理（`--vsp_postproc`），支持 `ask`/`sd`/`prebaked` 三种后端和多种图片处理方法。详见 docs/vsp_postprocessor.md。
 
 ### Output Organization
 
-All output goes to `output/`. Each run creates a job folder: `job_{num}_tasks_{total}_{Provider}_{model}_{MMDD_HHMMSS}/` containing `results.jsonl`, `eval.csv`, `console.log`, `summary.html`. A global counter in `output/.task_counter` provides monotonically increasing job numbers. Batch runs group jobs under `batch_{num}_{timestamp}/`.
+All output goes to `output/`. Detailed structure documented in docs/output_structure.md.
+
+- **Job 目录**: `job_{num}_tasks_{total}_{Provider}_{model}_{MMDD_HHMMSS}/` — 包含 results.jsonl, eval.csv, console.log, summary.html, details/ 等
+- **Batch 目录**: `batch_{num}_{timestamp}/` — 包含多个 job 目录 + batch_summary.html + report/
 
 ### Key Modules
 
@@ -95,6 +80,7 @@ All output goes to `output/`. Each run creates a job folder: `job_{num}_tasks_{t
 | `pseudo_random_sampler.py` | Deterministic per-category sampling for reproducible experiments |
 | `generate_report_with_charts.py` | HTML report with matplotlib charts |
 | `check_vsp_tool_usage.py` | Analyzes VSP tool usage in results |
+| `copy_sd_pictures.py` | Copies SD pictures to VSP prebaked_images directory |
 | `cleanup_output.py` | Cleans up output directories |
 | `view_jsonl.py` | JSONL file viewer/converter |
 
@@ -113,3 +99,10 @@ API keys are managed via `.env` file (loaded by python-dotenv). Key variables:
 - The project uses no build system or package manager beyond pip — scripts are run directly.
 - Tests use unittest and can be run individually as scripts (they auto-configure `sys.path`).
 - The JSONL format includes `pred` (model response), `origin` (input metadata), `eval_result` (safe/unsafe), and `meta` (model/params/timestamp).
+
+## Detailed Documentation
+
+- docs/cli_reference.md — request.py 全部命令行参数
+- docs/output_structure.md — output 目录详细结构和字段说明
+- docs/vsp_postprocessor.md — VSP 后处理器指南
+- COMT_GUIDE.md — CoMT 模式完整指南

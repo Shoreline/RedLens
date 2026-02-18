@@ -44,7 +44,7 @@ python request.py \
   --vsp_postproc_method visual_edit
 """
 
-import os, re, json, time, base64, glob, asyncio, random, contextlib, sys
+import os, re, json, time, base64, glob, asyncio, random, contextlib, sys, socket, subprocess
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, AsyncIterator, Iterable
@@ -56,6 +56,77 @@ ERROR_RATE_MIN_SAMPLES = 20
 
 from provider import BaseProvider, get_provider
 from pseudo_random_sampler import sample_by_category, print_sampling_stats
+
+# ============ SSH Tunnel Management (AutoDL) ============
+
+AUTODL_TUNNEL_PORTS = {
+    17860: 7860,  # GroundingDINO
+    17861: 7861,  # Depth Anything
+    17862: 7862,  # SOM
+    18000: 8000,  # Qwen LLM (hidden states server)
+}
+AUTODL_SSH_HOST = "seetacloud"
+
+def _is_port_open(port, host='localhost', timeout=1.0):
+    """Check if a local port is reachable."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (ConnectionRefusedError, TimeoutError, OSError):
+        return False
+
+def ensure_ssh_tunnels():
+    """
+    Ensure SSH tunnels to AutoDL (seetacloud) are active.
+    If not already running, start them in the background via `ssh -f -N`.
+    Tunnels persist across multiple request.py runs — only the first run starts them.
+    Returns True if tunnels are active, False on failure.
+    """
+    # Quick check: if a forwarded port is open, tunnels are already running
+    check_port = next(iter(AUTODL_TUNNEL_PORTS))
+    if _is_port_open(check_port):
+        print(f"✅ SSH tunnels already active")
+        return True
+
+    print(f"🔗 Starting SSH tunnels to AutoDL ({AUTODL_SSH_HOST})...")
+
+    cmd = [
+        'ssh', '-f', '-N',
+        '-o', 'ExitOnForwardFailure=yes',
+        '-o', 'ServerAliveInterval=60',
+        '-o', 'ServerAliveCountMax=3',
+    ]
+    for local_port, remote_port in AUTODL_TUNNEL_PORTS.items():
+        cmd.extend(['-L', f'{local_port}:localhost:{remote_port}'])
+    cmd.append(AUTODL_SSH_HOST)
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            print(f"❌ SSH tunnel failed: {result.stderr.strip()}")
+            return False
+    except subprocess.TimeoutExpired:
+        print(f"❌ SSH tunnel connection timed out (30s)")
+        return False
+    except FileNotFoundError:
+        print(f"❌ ssh command not found")
+        return False
+
+    # Wait for tunnels to become reachable
+    for _ in range(10):
+        time.sleep(0.5)
+        if _is_port_open(check_port):
+            active = {p: _is_port_open(p) for p in AUTODL_TUNNEL_PORTS}
+            active_count = sum(active.values())
+            print(f"✅ SSH tunnels active ({active_count}/{len(AUTODL_TUNNEL_PORTS)} ports)")
+            for lp, is_open in active.items():
+                rp = AUTODL_TUNNEL_PORTS[lp]
+                status = "✅" if is_open else "❌"
+                print(f"   {status} localhost:{lp} → remote:{rp}")
+            return True
+
+    print(f"❌ SSH tunnels did not become active within 5s")
+    return False
 
 # ============ Task Counter（单调递增的任务编号）============
 
@@ -152,6 +223,9 @@ class RunConfig:
     vsp_postproc_sd_negative_prompt: str = "blurry, distorted, artifacts"
     vsp_postproc_sd_num_steps: int = 50
     vsp_postproc_sd_guidance_scale: float = 7.5
+    # Custom LLM endpoint (for self-hosted models)
+    llm_base_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
 
 # ============ 数据与 Prompt ============
 
@@ -1333,7 +1407,13 @@ if __name__ == "__main__":
                        help="SD推理步数（默认: 50）")
     parser.add_argument("--vsp_postproc_sd_guidance_scale", type=float, default=7.5,
                        help="SD guidance scale（默认: 7.5）")
-    
+
+    # Custom LLM endpoint (for self-hosted models on AWS, etc.)
+    parser.add_argument("--llm_base_url", default=None,
+                       help="Custom LLM API base URL (e.g., http://34.210.214.193:8000/v1)")
+    parser.add_argument("--llm_api_key", default=None,
+                       help="API key for custom LLM endpoint (default: 'not-needed' when --llm_base_url is set)")
+
     args = parser.parse_args()
     
     # 验证 image_types 必须在 MMSB_IMAGE_QUESTION_MAP 中
@@ -1407,7 +1487,15 @@ if __name__ == "__main__":
         vsp_postproc_sd_negative_prompt=args.vsp_postproc_sd_negative_prompt,
         vsp_postproc_sd_num_steps=args.vsp_postproc_sd_num_steps,
         vsp_postproc_sd_guidance_scale=args.vsp_postproc_sd_guidance_scale,
+        llm_base_url=args.llm_base_url,
+        llm_api_key=args.llm_api_key,
     )
+
+    # ============ SSH Tunnel (AutoDL) ============
+    if cfg.provider in ["vsp", "comt_vsp"]:
+        if not ensure_ssh_tunnels():
+            print("❌ SSH tunnels to AutoDL required but could not be established. Aborting.")
+            sys.exit(1)
 
     # ============ 步骤 1: Request（生成答案）============
     print(f"\n{'='*80}")
