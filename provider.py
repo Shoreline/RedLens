@@ -397,21 +397,40 @@ class VSPProvider(BaseProvider):
             cat_num = category.split("-", 1)[0] if category and "-" in category else category
             file_prefix = f"{cat_num}_{index}" if cat_num else index
 
-            # 按轮次保存单独的 .npy 文件
+            # 按子任务(question)和轮次(turn)保存 .npy 文件
+            # 通过 content_preview 中的 THOUGHT 编号检测子任务边界：编号重置说明进入新子任务
+            import re
             turns_meta = []
-            for turn_idx, entry in enumerate(hs_list):
+            question_idx = 0
+            turn_in_question = 0
+            prev_thought_num = -1
+
+            for entry in hs_list:
                 hs_data = entry.get("hidden_state", {})
                 last_token = hs_data.get("last_token")
                 if last_token is None:
                     continue
 
+                # 解析 THOUGHT 编号，检测子任务边界
+                preview = entry.get("content_preview", "")
+                thought_match = re.match(r"THOUGHT\s+(\d+)", preview)
+                if thought_match:
+                    thought_num = int(thought_match.group(1))
+                    if thought_num <= prev_thought_num:
+                        # THOUGHT 编号未递增，说明进入了新的子任务
+                        question_idx += 1
+                        turn_in_question = 0
+                    prev_thought_num = thought_num
+
                 arr = np.array(last_token, dtype=np.float32)  # shape: (hidden_dim,)
-                np.save(os.path.join(hs_dir, f"{file_prefix}_t{turn_idx}.npy"), arr)
+                np.save(os.path.join(hs_dir, f"{file_prefix}_q{question_idx}_t{turn_in_question}.npy"), arr)
 
                 turns_meta.append({
-                    "turn": turn_idx,
-                    "content_preview": entry.get("content_preview", ""),
+                    "question": question_idx,
+                    "turn": turn_in_question,
+                    "content_preview": preview,
                 })
+                turn_in_question += 1
 
             # 保存轮次元数据
             if turns_meta:
