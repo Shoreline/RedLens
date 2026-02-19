@@ -50,7 +50,7 @@ python -m pytest tests/
 - **OpenAIProvider** / **OpenRouterProvider** — API-based, use OpenAI SDK
 - **QwenProvider** — local/remote Qwen via aiohttp
 - **VSPProvider** — spawns VisualSketchpad as subprocess, extracts answers from debug logs
-- **ComtVspProvider** — dual-task VSP (CoMT object detection + safety evaluation)
+- **ComtVspProvider** — sequential dual-task VSP (CoMT object detection first, then safety evaluation as follow-up in the same conversation)
 
 Provider is selected via `--provider` flag; factory function `get_provider()` instantiates it. Also supports custom LLM endpoints via `--llm_base_url` / `--llm_api_key`. When using a custom endpoint that returns `hidden_state` in the API response, VSP/CoMT-VSP providers automatically capture and save hidden states as per-turn `.npy` files in `{job_folder}/hidden_states/`.
 

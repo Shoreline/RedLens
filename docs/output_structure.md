@@ -32,7 +32,7 @@ job_171_tasks_1_ComtVsp_Qwen3-VL-8B-Instruct_0216_192859/
         └── {category}/
             └── {index}/
                 ├── input/
-                │   ├── request.json
+                │   ├── request.json            # VSP 任务输入（含 query + follow_up_queries）
                 │   └── image_*.jpg
                 ├── output/
                 │   ├── vsp_debug.log
