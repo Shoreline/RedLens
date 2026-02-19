@@ -23,9 +23,9 @@ job_171_tasks_1_ComtVsp_Qwen3-VL-8B-Instruct_0216_192859/
 ├── prebaked_report_data.json   # prebaked processor 数据（启用时生成）
 ├── hidden_states/              # Hidden states（仅自定义 LLM 端点且模型返回时生成）
 │   ├── meta.json               # 全局元信息 {layer, hidden_dim, dtype, model}
-│   ├── {index}_t0.npy          # 第 0 轮 LLM 调用的 last-token hidden state, shape: (hidden_dim,)
-│   ├── {index}_t1.npy          # 第 1 轮
-│   ├── {index}_turns.json      # 轮次元数据（turn 编号 + 对话内容摘要）
+│   ├── {cat}_{index}_t0.npy    # 第 0 轮 LLM 调用的 last-token hidden state, shape: (hidden_dim,)
+│   ├── {cat}_{index}_t1.npy    # 第 1 轮（cat=category 编号如 08, index=问题编号）
+│   ├── {cat}_{index}_turns.json # 轮次元数据（turn 编号 + 对话内容摘要）
 │   └── ...
 └── details/                    # VSP/CoMT-VSP 详细输出（仅 VSP 类 provider）
     └── vsp_{YYYY-MM-DD_HH-MM-SS}/

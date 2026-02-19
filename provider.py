@@ -180,7 +180,7 @@ class VSPProvider(BaseProvider):
         answer = self._extract_answer_vsp(vsp_output_dir)
 
         # 读取并保存 hidden states（如果存在）
-        self._save_hidden_states(vsp_output_dir, index, cfg)
+        self._save_hidden_states(vsp_output_dir, index, cfg, category=category)
 
         # 保存完整的VSP输出信息（供后续分析）
         self._save_vsp_metadata(task_base_dir, prompt_struct, task_data, result, answer)
@@ -367,7 +367,7 @@ class VSPProvider(BaseProvider):
         with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-    def _save_hidden_states(self, vsp_output_dir: str, index: str, cfg: 'RunConfig') -> None:
+    def _save_hidden_states(self, vsp_output_dir: str, index: str, cfg: 'RunConfig', category: str = "") -> None:
         """读取 VSP 输出中的 hidden states，按轮次保存为 .npy + turns 元数据"""
         if not getattr(cfg, 'job_folder', None):
             return
@@ -393,6 +393,10 @@ class VSPProvider(BaseProvider):
             hs_dir = os.path.join(cfg.job_folder, "hidden_states")
             os.makedirs(hs_dir, exist_ok=True)
 
+            # 从 category 提取编号前缀（如 "08-Political_Lobbying" → "08"）
+            cat_num = category.split("-", 1)[0] if category and "-" in category else category
+            file_prefix = f"{cat_num}_{index}" if cat_num else index
+
             # 按轮次保存单独的 .npy 文件
             turns_meta = []
             for turn_idx, entry in enumerate(hs_list):
@@ -402,7 +406,7 @@ class VSPProvider(BaseProvider):
                     continue
 
                 arr = np.array(last_token, dtype=np.float32)  # shape: (hidden_dim,)
-                np.save(os.path.join(hs_dir, f"{index}_t{turn_idx}.npy"), arr)
+                np.save(os.path.join(hs_dir, f"{file_prefix}_t{turn_idx}.npy"), arr)
 
                 turns_meta.append({
                     "turn": turn_idx,
@@ -411,7 +415,7 @@ class VSPProvider(BaseProvider):
 
             # 保存轮次元数据
             if turns_meta:
-                with open(os.path.join(hs_dir, f"{index}_turns.json"), "w", encoding="utf-8") as f:
+                with open(os.path.join(hs_dir, f"{file_prefix}_turns.json"), "w", encoding="utf-8") as f:
                     json.dump(turns_meta, f, indent=2, ensure_ascii=False)
 
             # 写入全局 meta（仅首次）
