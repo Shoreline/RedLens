@@ -52,7 +52,7 @@ python -m pytest tests/
 - **VSPProvider** — spawns VisualSketchpad as subprocess, extracts answers from debug logs
 - **ComtVspProvider** — dual-task VSP (CoMT object detection + safety evaluation)
 
-Provider is selected via `--provider` flag; factory function `get_provider()` instantiates it. Also supports custom LLM endpoints via `--llm_base_url` / `--llm_api_key`.
+Provider is selected via `--provider` flag; factory function `get_provider()` instantiates it. Also supports custom LLM endpoints via `--llm_base_url` / `--llm_api_key`. When using a custom endpoint that returns `hidden_state` in the API response, VSP/CoMT-VSP providers automatically capture and save hidden states as per-turn `.npy` files in `{job_folder}/hidden_states/`.
 
 ### Request Processing (`request.py`)
 

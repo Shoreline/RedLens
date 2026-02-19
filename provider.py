@@ -178,7 +178,10 @@ class VSPProvider(BaseProvider):
         
         # 从 debug log 中提取答案（VSP 专用方法）
         answer = self._extract_answer_vsp(vsp_output_dir)
-        
+
+        # 读取并保存 hidden states（如果存在）
+        self._save_hidden_states(vsp_output_dir, index, cfg)
+
         # 保存完整的VSP输出信息（供后续分析）
         self._save_vsp_metadata(task_base_dir, prompt_struct, task_data, result, answer)
         
@@ -339,22 +342,96 @@ class VSPProvider(BaseProvider):
         except Exception as e:
             raise RuntimeError(f"Failed to call VSP: {str(e)}")
     
-    def _save_vsp_metadata(self, output_dir: str, prompt_struct: Dict[str, Any], 
-                           task_data: Dict[str, Any], vsp_result: Dict[str, Any], 
+    def _save_vsp_metadata(self, output_dir: str, prompt_struct: Dict[str, Any],
+                           task_data: Dict[str, Any], vsp_result: Dict[str, Any],
                            answer: str) -> None:
-        """保存VSP执行的元数据，方便后续分析"""
-        metadata = {
-            "prompt_struct": prompt_struct,
-            "task_data": task_data,
-            "vsp_result": vsp_result,
-            "extracted_answer": answer,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        """保存VSP执行的元数据（精简版，不含冗余数据）
+
+        不再保存 prompt_struct（含 base64 图片，已在 results.jsonl 的 sent 字段中）
+        和 vsp_result（已在 output/input/output.json 中），大幅减少文件体积。
+        """
+        slim_task_data = {
+            "query": task_data.get("query", ""),
+            "image_count": len(task_data.get("images", [])),
         }
-        
+        if "comt_task_info" in task_data:
+            slim_task_data["comt_task_info"] = task_data["comt_task_info"]
+
+        metadata = {
+            "extracted_answer": answer,
+            "task_data": slim_task_data,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
         metadata_file = os.path.join(output_dir, "mediator_metadata.json")
         with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
-    
+
+    def _save_hidden_states(self, vsp_output_dir: str, index: str, cfg: 'RunConfig') -> None:
+        """读取 VSP 输出中的 hidden states，按轮次保存为 .npy + turns 元数据"""
+        if not getattr(cfg, 'job_folder', None):
+            return
+
+        # hidden_states.json 位于 VSP task_directory 中（output_dir/basename(input_dir)/）
+        hs_candidates = []
+        for root, dirs, files in os.walk(vsp_output_dir):
+            if "hidden_states.json" in files:
+                hs_candidates.append(os.path.join(root, "hidden_states.json"))
+
+        if not hs_candidates:
+            return
+
+        try:
+            import numpy as np
+
+            with open(hs_candidates[0], "r") as f:
+                hs_list = json.load(f)
+
+            if not hs_list:
+                return
+
+            hs_dir = os.path.join(cfg.job_folder, "hidden_states")
+            os.makedirs(hs_dir, exist_ok=True)
+
+            # 按轮次保存单独的 .npy 文件
+            turns_meta = []
+            for turn_idx, entry in enumerate(hs_list):
+                hs_data = entry.get("hidden_state", {})
+                last_token = hs_data.get("last_token")
+                if last_token is None:
+                    continue
+
+                arr = np.array(last_token, dtype=np.float32)  # shape: (hidden_dim,)
+                np.save(os.path.join(hs_dir, f"{index}_t{turn_idx}.npy"), arr)
+
+                turns_meta.append({
+                    "turn": turn_idx,
+                    "content_preview": entry.get("content_preview", ""),
+                })
+
+            # 保存轮次元数据
+            if turns_meta:
+                with open(os.path.join(hs_dir, f"{index}_turns.json"), "w", encoding="utf-8") as f:
+                    json.dump(turns_meta, f, indent=2, ensure_ascii=False)
+
+            # 写入全局 meta（仅首次）
+            meta_path = os.path.join(hs_dir, "meta.json")
+            if not os.path.exists(meta_path):
+                first_hs = hs_list[0].get("hidden_state", {})
+                meta_info = {
+                    "layer": first_hs.get("layer", -1),
+                    "hidden_dim": first_hs.get("hidden_dim"),
+                    "dtype": "float32",
+                    "model": first_hs.get("model", "unknown"),
+                }
+                with open(meta_path, "w") as f:
+                    json.dump(meta_info, f, indent=2)
+
+        except ImportError:
+            print("Warning: numpy not available, skipping hidden states save")
+        except Exception as e:
+            print(f"Warning: Failed to save hidden states for index {index}: {e}")
+
     def _extract_answer_vsp(self, vsp_output_dir: str) -> str:
         """
         从VSP的debug log中提取最终答案（VSP专用方法）
