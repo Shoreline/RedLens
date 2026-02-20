@@ -83,6 +83,7 @@ All output goes to `output/`. Detailed structure documented in docs/output_struc
 | `copy_sd_pictures.py` | Copies SD pictures to VSP prebaked_images directory |
 | `cleanup_output.py` | Cleans up output directories |
 | `view_jsonl.py` | JSONL file viewer/converter |
+| `compare_hidden_states.py` | Cross-job hidden states difference direction analysis |
 
 ## Configuration
 
