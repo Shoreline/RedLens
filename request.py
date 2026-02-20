@@ -567,7 +567,8 @@ async def consumer(
                 eta_str = "计算中..."
             
             # 打印进度
-            print(f"✅ [{completed}/{total}] {percent:.1f}% | "
+            status_icon = "❌" if is_error else "✅"
+            print(f"{status_icon} [{completed}/{total}] {percent:.1f}% | "
                   f"耗时: {format_time(total_elapsed)} | "
                   f"平均: {avg_time:.2f}s/任务 | "
                   f"本次: {task_duration:.2f}s | "
@@ -1490,6 +1491,34 @@ if __name__ == "__main__":
         llm_base_url=args.llm_base_url,
         llm_api_key=args.llm_api_key,
     )
+
+    # ============ 保存运行配置（供 job_fix.py 读取）============
+    if temp_job_folder:
+        run_config_to_save = {
+            "provider": args.provider,
+            "model": args.model,
+            "temperature": args.temp,
+            "top_p": args.top_p,
+            "max_tokens": args.max_tokens,
+            "seed": args.seed,
+            "consumers": args.consumers,
+            "comt_sample_id": args.comt_sample_id,
+            "image_types": args.image_types,
+            "categories": args.categories,
+            "json_glob": args.json_glob,
+            "image_base": args.image_base,
+            "sampling_rate": args.sampling_rate,
+            "sampling_seed": args.sampling_seed,
+            "llm_base_url": args.llm_base_url,
+            "eval_model": args.eval_model,
+            "eval_concurrency": args.eval_concurrency,
+            "vsp_postproc": args.vsp_postproc,
+            "vsp_postproc_backend": args.vsp_postproc_backend,
+            "vsp_postproc_method": args.vsp_postproc_method,
+            "vsp_postproc_fallback": args.vsp_postproc_fallback,
+        }
+        with open(os.path.join(temp_job_folder, "run_config.json"), "w", encoding="utf-8") as f:
+            json.dump(run_config_to_save, f, indent=2, ensure_ascii=False)
 
     # ============ SSH Tunnel (AutoDL) ============
     if cfg.provider in ["vsp", "comt_vsp"]:

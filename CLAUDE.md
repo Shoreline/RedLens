@@ -24,6 +24,11 @@ python request.py --provider vsp --consumers 3 --max_tasks 50
 # CoMT-VSP dual-task mode
 python request.py --provider comt_vsp --comt_sample_id "deletion-0107" --max_tasks 20
 
+# Retry failed tasks in a job (checkpoint-restart)
+python job_fix.py 182
+python job_fix.py 182 --dry_run  # preview only
+python job_fix.py 182 --skip_eval 
+
 # Evaluation only
 python mmsb_eval.py --jsonl_file output/job_*/results.jsonl
 
@@ -76,6 +81,7 @@ All output goes to `output/`. Detailed structure documented in docs/output_struc
 | `request.py` | Main entry point — inference + evaluation pipeline |
 | `provider.py` | LLM provider abstraction (OpenAI, OpenRouter, Qwen, VSP, CoMT-VSP) |
 | `mmsb_eval.py` | Safety evaluation engine (GPT as judge) |
+| `job_fix.py` | Resume failed tasks in a job (checkpoint-restart) |
 | `batch_request.py` | Runs parameter combinations, generates batch reports |
 | `pseudo_random_sampler.py` | Deterministic per-category sampling for reproducible experiments |
 | `generate_report_with_charts.py` | HTML report with matplotlib charts |
