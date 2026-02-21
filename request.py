@@ -82,9 +82,8 @@ def ensure_ssh_tunnels():
     Tunnels persist across multiple request.py runs — only the first run starts them.
     Returns True if tunnels are active, False on failure.
     """
-    # Quick check: if a forwarded port is open, tunnels are already running
-    check_port = next(iter(AUTODL_TUNNEL_PORTS))
-    if _is_port_open(check_port):
+    # Quick check: only consider tunnels active if ALL forwarded ports are open
+    if all(_is_port_open(p) for p in AUTODL_TUNNEL_PORTS):
         print(f"✅ SSH tunnels already active")
         return True
 
@@ -115,7 +114,7 @@ def ensure_ssh_tunnels():
     # Wait for tunnels to become reachable
     for _ in range(10):
         time.sleep(0.5)
-        if _is_port_open(check_port):
+        if all(_is_port_open(p) for p in AUTODL_TUNNEL_PORTS):
             active = {p: _is_port_open(p) for p in AUTODL_TUNNEL_PORTS}
             active_count = sum(active.values())
             print(f"✅ SSH tunnels active ({active_count}/{len(AUTODL_TUNNEL_PORTS)} ports)")
@@ -226,6 +225,8 @@ class RunConfig:
     # Custom LLM endpoint (for self-hosted models)
     llm_base_url: Optional[str] = None
     llm_api_key: Optional[str] = None
+    # OpenRouter provider routing
+    openrouter_provider: Optional[str] = None  # 指定 OpenRouter 底层提供商（如 "together", "parasail", "novita"）
 
 # ============ 数据与 Prompt ============
 
@@ -1415,6 +1416,11 @@ if __name__ == "__main__":
     parser.add_argument("--llm_api_key", default=None,
                        help="API key for custom LLM endpoint (default: 'not-needed' when --llm_base_url is set)")
 
+    # OpenRouter provider routing
+    parser.add_argument("--openrouter_provider", default=None,
+                       help="指定 OpenRouter 底层提供商 slug（如 'together', 'parasail', 'novita'）。"
+                            "仅对 --provider openrouter 有效")
+
     args = parser.parse_args()
     
     # 验证 image_types 必须在 MMSB_IMAGE_QUESTION_MAP 中
@@ -1490,6 +1496,7 @@ if __name__ == "__main__":
         vsp_postproc_sd_guidance_scale=args.vsp_postproc_sd_guidance_scale,
         llm_base_url=args.llm_base_url,
         llm_api_key=args.llm_api_key,
+        openrouter_provider=args.openrouter_provider,
     )
 
     # ============ 保存运行配置（供 job_fix.py 读取）============
@@ -1510,6 +1517,7 @@ if __name__ == "__main__":
             "sampling_rate": args.sampling_rate,
             "sampling_seed": args.sampling_seed,
             "llm_base_url": args.llm_base_url,
+            "openrouter_provider": args.openrouter_provider,
             "eval_model": args.eval_model,
             "eval_concurrency": args.eval_concurrency,
             "vsp_postproc": args.vsp_postproc,

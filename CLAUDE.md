@@ -18,6 +18,9 @@ python request.py --max_tasks 10
 # Full run with specific provider
 python request.py --provider openrouter --model "qwen/qwen3-vl-235b-a22b-instruct" --max_tasks 50
 
+# OpenRouter with pinned upstream provider
+python request.py --provider openrouter --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alibaba --max_tasks 50
+
 # VSP provider (use lower concurrency)
 python request.py --provider vsp --consumers 3 --max_tasks 50
 
@@ -57,7 +60,7 @@ python -m pytest tests/
 - **VSPProvider** — spawns VisualSketchpad as subprocess, extracts answers from debug logs
 - **ComtVspProvider** — sequential dual-task VSP (CoMT object detection first, then safety evaluation as follow-up in the same conversation)
 
-Provider is selected via `--provider` flag; factory function `get_provider()` instantiates it. Also supports custom LLM endpoints via `--llm_base_url` / `--llm_api_key`. When using a custom endpoint that returns `hidden_state` in the API response, VSP/CoMT-VSP providers automatically capture and save hidden states as per-turn `.npy` files in `{job_folder}/hidden_states/`.
+Provider is selected via `--provider` flag; factory function `get_provider()` instantiates it. OpenRouterProvider supports `--openrouter_provider` to pin a specific upstream provider (e.g. `together`, `alibaba`). Also supports custom LLM endpoints via `--llm_base_url` / `--llm_api_key`. When using a custom endpoint that returns `hidden_state` in the API response, VSP/CoMT-VSP providers automatically capture and save hidden states as per-turn `.npy` files in `{job_folder}/hidden_states/`.
 
 ### Request Processing (`request.py`)
 

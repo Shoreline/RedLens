@@ -71,6 +71,14 @@
 | `--vsp_postproc_sd_num_steps` | `50` | SD 推理步数 |
 | `--vsp_postproc_sd_guidance_scale` | `7.5` | SD guidance scale |
 
+## OpenRouter 提供商路由
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--openrouter_provider` | `None` | 指定 OpenRouter 底层提供商 slug（仅对 `--provider openrouter` 有效） |
+
+OpenRouter 同一模型可能有多个底层提供商（如 `together`, `parasail`, `novita`, `alibaba` 等），默认由 OpenRouter 自动路由。使用此参数可锁定到指定提供商，不允许 fallback。
+
 ## 自定义 LLM 端点
 
 | 参数 | 默认值 | 说明 |
@@ -86,6 +94,9 @@ python request.py --max_tasks 10
 
 # 指定模型和 provider
 python request.py --provider openrouter --model "qwen/qwen3-vl-235b-a22b-instruct" --max_tasks 50
+
+# OpenRouter 指定底层提供商（如 alibaba、together）
+python request.py --provider openrouter --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alibaba --max_tasks 50
 
 # VSP（降低并发）
 python request.py --provider vsp --consumers 3 --max_tasks 50

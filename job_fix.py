@@ -339,6 +339,9 @@ def main():
     if os.path.exists(retry_jsonl):
         os.remove(retry_jsonl)
 
+    # OpenRouter provider routing
+    openrouter_provider = saved_cfg.get("openrouter_provider") if saved_cfg else None
+
     cfg = RunConfig(
         provider=provider,
         model=model,
@@ -352,6 +355,7 @@ def main():
         job_folder=job_folder,
         llm_base_url=llm_base_url,
         llm_api_key=args.llm_api_key,
+        openrouter_provider=openrouter_provider,
     )
 
     # ---- 5. 环境准备 ----

@@ -132,7 +132,16 @@ def close_logging():
 # - 列表：需要遍历的参数变体
 args_combo = [
     # 固定参数：类别和任务数
-    "--model 'qwen/qwen3-vl-235b-a22b-instruct'  --sampling_rate 0.12",
+    # "--model 'qwen/qwen3-vl-235b-a22b-instruct'  --sampling_rate 0.12",
+    
+    # # 需要遍历的参数变体：不同的 provider 和 model 组合
+    # [
+    #     '--provider openrouter',
+    #     '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback ask --vsp_postproc_method visual_mask',
+    #     '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method good --vsp_postproc_sd_prompt "remove the boxed objects"',
+    #     '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method bad --vsp_postproc_sd_prompt "remove the boxed objects"',
+    # ],
+    "--model 'qwen/qwen3-vl-8b-instruct'  --sampling_rate 0.12 --openrouter_provider alibaba",
     
     # 需要遍历的参数变体：不同的 provider 和 model 组合
     [
@@ -140,7 +149,19 @@ args_combo = [
         '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback ask --vsp_postproc_method visual_mask',
         '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method good --vsp_postproc_sd_prompt "remove the boxed objects"',
         '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method bad --vsp_postproc_sd_prompt "remove the boxed objects"',
-    ],
+    ],    
+
+    # self
+    # "  --sampling_rate 0.12 " ,
+    
+    # # 需要遍历的参数变体：不同的 provider 和 model 组合
+    # [
+    #     '--model “qwen/qwen3-vl-8b-instruct” ',
+    #     '--model “Qwen3-VL-8B-Instruct” --provider comt_vsp --llm_base_url “https://56b53492.r22.cpolar.top/v1” --comt_sample_id deletion-0107 --consumers 3',
+    #     # '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback ask --vsp_postproc_method visual_mask',
+    #     # '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method good --vsp_postproc_sd_prompt "remove the boxed objects"',
+    #     # '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method bad --vsp_postproc_sd_prompt "remove the boxed objects"',
+    ],    
 ]
 
 # 是否显示详细输出

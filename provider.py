@@ -96,8 +96,29 @@ class OpenRouterProvider(BaseProvider):
         # 只在 seed 不为 None 时添加（并非所有模型都支持）
         if cfg.seed is not None:
             request_params["seed"] = cfg.seed
-        
-        resp = await self.client.chat.completions.create(**request_params)
+
+        # OpenRouter provider routing（指定底层提供商）
+        openrouter_provider = getattr(cfg, 'openrouter_provider', None)
+        if openrouter_provider:
+            request_params["extra_body"] = {
+                "provider": {
+                    "only": [openrouter_provider],
+                    "allow_fallbacks": False,
+                }
+            }
+
+        # 首次请求使用 with_raw_response 检查实际提供商
+        if openrouter_provider and not getattr(self, '_provider_logged', False):
+            raw_resp = await self.client.chat.completions.with_raw_response.create(**request_params)
+            actual_provider = raw_resp.headers.get('x-openrouter-provider', 'unknown')
+            print(f"🔗 OpenRouter 提供商路由: 请求=[{openrouter_provider}], 实际=[{actual_provider}]")
+            if actual_provider != openrouter_provider:
+                print(f"   ⚠️  实际提供商与请求不符！请检查 provider slug 是否正确")
+            self._provider_logged = True
+            resp = raw_resp.parse()
+        else:
+            resp = await self.client.chat.completions.create(**request_params)
+
         return (resp.choices[0].message.content or "").strip()
 
 
@@ -295,6 +316,7 @@ class VSPProvider(BaseProvider):
         if hasattr(self, 'comt_sample_id') and self.comt_sample_id:
             env["VSP_COMT_SAMPLE_ID"] = self.comt_sample_id
 
+        process = None
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -304,7 +326,7 @@ class VSPProvider(BaseProvider):
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await process.communicate()
-            
+
             stdout_str = stdout.decode('utf-8', errors='ignore')
             stderr_str = stderr.decode('utf-8', errors='ignore')
 
@@ -324,7 +346,7 @@ class VSPProvider(BaseProvider):
                     print(f"Warning: VSP failed but output.json exists, attempting to read...")
                     with open(output_file, "r") as f:
                         return json.load(f)
-                
+
                 raise RuntimeError(
                     f"VSP execution failed (code {process.returncode}). "
                     f"Check debug log: {debug_file}\n"
@@ -341,6 +363,13 @@ class VSPProvider(BaseProvider):
 
         except Exception as e:
             raise RuntimeError(f"Failed to call VSP: {str(e)}")
+        finally:
+            # 超时（CancelledError）或异常时清理子进程，防止僵尸进程堆积
+            if process is not None and process.returncode is None:
+                try:
+                    process.kill()
+                except (ProcessLookupError, OSError):
+                    pass
     
     def _save_vsp_metadata(self, output_dir: str, prompt_struct: Dict[str, Any],
                            task_data: Dict[str, Any], vsp_result: Dict[str, Any],
