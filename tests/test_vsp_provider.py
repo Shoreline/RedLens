@@ -23,7 +23,8 @@ async def test_vsp_provider():
     
     # 创建测试配置
     cfg = RunConfig(
-        provider="vsp",
+        mode="vsp",
+        provider="openrouter",
         model_name="gpt-4o",  # VSP内部会使用自己的模型配置
         temperature=0.0,
         max_tokens=2048

@@ -62,7 +62,7 @@ Created two documentation files:
 ```bash
 # Enable visual masking
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --max_tasks 10 \
   --vsp_postproc \
   --vsp_postproc_method visual_mask
@@ -73,7 +73,7 @@ python request.py \
 ```bash
 # Enable inpainting with CoMT-VSP
 python request.py \
-  --provider comt_vsp \
+  --mode comt_vsp \
   --comt_sample_id "creation-10003" \
   --max_tasks 10 \
   --vsp_postproc \
@@ -84,7 +84,7 @@ python request.py \
 
 ```bash
 # Run without post-processing
-python request.py --provider vsp --max_tasks 10
+python request.py --mode vsp --max_tasks 10
 # (No --vsp_postproc flag = disabled)
 ```
 
@@ -155,7 +155,7 @@ Test that environment variables are correctly set:
 ```bash
 # Run with verbose output
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --max_tasks 1 \
   --vsp_postproc \
   --vsp_postproc_method visual_mask
@@ -177,10 +177,10 @@ Compare images before and after post-processing:
 
 ```bash
 # Run without post-processing
-python request.py --provider vsp --max_tasks 5
+python request.py --mode vsp --max_tasks 5
 
 # Run with post-processing
-python request.py --provider vsp --max_tasks 5 --vsp_postproc --vsp_postproc_method visual_mask
+python request.py --mode vsp --max_tasks 5 --vsp_postproc --vsp_postproc_method visual_mask
 
 # Compare the output images visually
 ```
@@ -217,15 +217,15 @@ python request.py --provider vsp --max_tasks 5 --vsp_postproc --vsp_postproc_met
 **Check 1: Provider type**
 ```bash
 # Only works with vsp and comt_vsp
---provider vsp  # ✅
---provider comt_vsp  # ✅
+--mode vsp  # ✅
+--mode comt_vsp  # ✅
 --provider openai  # ❌ (ignored)
 ```
 
 **Check 2: Flag set**
 ```bash
 # Must include --vsp_postproc
-python request.py --provider vsp --vsp_postproc --vsp_postproc_method visual_mask
+python request.py --mode vsp --vsp_postproc --vsp_postproc_method visual_mask
 ```
 
 **Check 3: Vision tools called**

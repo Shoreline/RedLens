@@ -161,7 +161,7 @@ curl -s http://localhost:18000/v1/chat/completions \
   -d '{"model":"Qwen3-VL-8B-Instruct","messages":[{"role":"user","content":"Say hello."}],"max_tokens":32,"temperature":0.7}'
 
 # 4. Run Mediator pointing to AutoDL (via SSH tunnel)
-python request.py --provider comt_vsp --model "Qwen3-VL-8B-Instruct" \
+python request.py --mode comt_vsp --model "Qwen3-VL-8B-Instruct" \
   --llm_base_url "http://localhost:18000/v1" \
   --comt_sample_id "deletion-0107" --max_tasks 10
 ```

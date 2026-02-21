@@ -29,7 +29,7 @@ The VSP post-processor now supports Stable Diffusion via Replicate API for intel
 
 ```bash
 python request.py \
-  --provider comt_vsp \
+  --mode comt_vsp \
   --model "qwen/qwen3-vl-235b-a22b-instruct" \
   --comt_sample_id deletion-0107 \
   --max_tasks 1 \
@@ -41,7 +41,7 @@ python request.py \
 
 ```bash
 python request.py \
-  --provider comt_vsp \
+  --mode comt_vsp \
   --max_tasks 5 \
   --vsp_postproc \
   --vsp_postproc_backend sd \
@@ -53,7 +53,7 @@ python request.py \
 
 ```bash
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --max_tasks 10 \
   --vsp_postproc \
   --vsp_postproc_backend sd \
@@ -64,7 +64,7 @@ python request.py \
 
 ```bash
 python request.py \
-  --provider comt_vsp \
+  --mode comt_vsp \
   --max_tasks 5 \
   --vsp_postproc \
   --vsp_postproc_backend sd \
@@ -184,7 +184,7 @@ For testing, use `--max_tasks 5` to limit costs.
 
 ```bash
 python request.py \
-  --provider comt_vsp \
+  --mode comt_vsp \
   --model "qwen/qwen3-vl-235b-a22b-instruct" \
   --comt_sample_id deletion-0107 \
   --max_tasks 1 \
@@ -197,7 +197,7 @@ python request.py \
 
 ```bash
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --categories "01-Illegal_Activity" "08-Political_Lobbying" \
   --max_tasks 20 \
   --vsp_postproc \
@@ -211,10 +211,10 @@ Run two jobs and compare:
 
 ```bash
 # ASK (fast)
-python request.py --provider vsp --max_tasks 5 --vsp_postproc --vsp_postproc_backend ask --vsp_postproc_method visual_edit
+python request.py --mode vsp --max_tasks 5 --vsp_postproc --vsp_postproc_backend ask --vsp_postproc_method visual_edit
 
 # SD (high quality)
-python request.py --provider vsp --max_tasks 5 --vsp_postproc --vsp_postproc_backend sd
+python request.py --mode vsp --max_tasks 5 --vsp_postproc --vsp_postproc_backend sd
 ```
 
 ## Notes

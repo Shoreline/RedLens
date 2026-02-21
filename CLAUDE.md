@@ -12,20 +12,23 @@ Mediator is a Python framework for inference and evaluation on the MM-SafetyBenc
 # Setup
 python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
 
-# Quick test
+# Quick test (default: --mode direct --provider openrouter)
 python request.py --max_tasks 10
 
-# Full run with specific provider
-python request.py --provider openrouter --model "qwen/qwen3-vl-235b-a22b-instruct" --max_tasks 50
+# Direct mode with OpenAI
+python request.py --provider openai --model "gpt-5" --max_tasks 50
+
+# Direct mode with custom LLM endpoint
+python request.py --llm_base_url "http://autodl:8000/v1" --model "Qwen3-VL-8B" --max_tasks 50
 
 # OpenRouter with pinned upstream provider
-python request.py --provider openrouter --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alibaba --max_tasks 50
+python request.py --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alibaba --max_tasks 50
 
-# VSP provider (use lower concurrency)
-python request.py --provider vsp --consumers 3 --max_tasks 50
+# VSP mode (use lower concurrency)
+python request.py --mode vsp --consumers 3 --max_tasks 50
 
 # CoMT-VSP dual-task mode
-python request.py --provider comt_vsp --comt_sample_id "deletion-0107" --max_tasks 20
+python request.py --mode comt_vsp --comt_sample_id "deletion-0107" --max_tasks 20
 
 # Retry failed tasks in a job (checkpoint-restart)
 python job_fix.py 182
@@ -60,7 +63,7 @@ python -m pytest tests/
 - **VSPProvider** — spawns VisualSketchpad as subprocess, extracts answers from debug logs
 - **ComtVspProvider** — sequential dual-task VSP (CoMT object detection first, then safety evaluation as follow-up in the same conversation)
 
-Provider is selected via `--provider` flag; factory function `get_provider()` instantiates it. OpenRouterProvider supports `--openrouter_provider` to pin a specific upstream provider (e.g. `together`, `alibaba`). Also supports custom LLM endpoints via `--llm_base_url` / `--llm_api_key`. When using a custom endpoint that returns `hidden_state` in the API response, VSP/CoMT-VSP providers automatically capture and save hidden states as per-turn `.npy` files in `{job_folder}/hidden_states/`.
+Execution mode is selected via `--mode` (`direct`/`vsp`/`comt_vsp`), and LLM provider via `--provider` (`openai`/`openrouter`, default `openrouter`). Factory function `get_provider()` dispatches based on mode first, then provider. OpenRouterProvider supports `--openrouter_provider` to pin a specific upstream provider (e.g. `together`, `alibaba`). All modes support `--llm_base_url` to override the default LLM endpoint (highest priority). When using a custom endpoint that returns `hidden_state` in the API response, VSP/CoMT-VSP providers automatically capture and save hidden states as per-turn `.npy` files in `{job_folder}/hidden_states/`.
 
 ### Request Processing (`request.py`)
 

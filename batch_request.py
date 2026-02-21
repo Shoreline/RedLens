@@ -131,37 +131,16 @@ def close_logging():
 # - 字符串：固定参数（所有组合都会使用）
 # - 列表：需要遍历的参数变体
 args_combo = [
-    # 固定参数：类别和任务数
-    # "--model 'qwen/qwen3-vl-235b-a22b-instruct'  --sampling_rate 0.12",
-    
-    # # 需要遍历的参数变体：不同的 provider 和 model 组合
-    # [
-    #     '--provider openrouter',
-    #     '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback ask --vsp_postproc_method visual_mask',
-    #     '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method good --vsp_postproc_sd_prompt "remove the boxed objects"',
-    #     '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method bad --vsp_postproc_sd_prompt "remove the boxed objects"',
-    # ],
+    # 固定参数
     "--model 'qwen/qwen3-vl-8b-instruct'  --sampling_rate 0.12 --openrouter_provider alibaba",
-    
-    # 需要遍历的参数变体：不同的 provider 和 model 组合
-    [
-        '--provider openrouter',
-        '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback ask --vsp_postproc_method visual_mask',
-        '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method good --vsp_postproc_sd_prompt "remove the boxed objects"',
-        '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method bad --vsp_postproc_sd_prompt "remove the boxed objects"',
-    ],    
 
-    # self
-    # "  --sampling_rate 0.12 " ,
-    
-    # # 需要遍历的参数变体：不同的 provider 和 model 组合
-    # [
-    #     '--model “qwen/qwen3-vl-8b-instruct” ',
-    #     '--model “Qwen3-VL-8B-Instruct” --provider comt_vsp --llm_base_url “https://56b53492.r22.cpolar.top/v1” --comt_sample_id deletion-0107 --consumers 3',
-    #     # '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback ask --vsp_postproc_method visual_mask',
-    #     # '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method good --vsp_postproc_sd_prompt "remove the boxed objects"',
-    #     # '--provider comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method bad --vsp_postproc_sd_prompt "remove the boxed objects"',
-    ],    
+    # 需要遍历的参数变体：不同的 mode 组合
+    [
+        '--mode direct',
+        '--mode comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback ask --vsp_postproc_method visual_mask',
+        '--mode comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method good --vsp_postproc_sd_prompt "remove the boxed objects"',
+        '--mode comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method bad --vsp_postproc_sd_prompt "remove the boxed objects"',
+    ],
 ]
 
 # 是否显示详细输出
@@ -191,7 +170,8 @@ class RunResult:
     summary_file: Optional[str] = None      # summary.html 路径
     error_message: Optional[str] = None     # 错误信息
     error_key: Optional[str] = None         # 错误类型键
-    provider: Optional[str] = None          # Provider
+    mode: Optional[str] = None              # Mode (direct/vsp/comt_vsp)
+    provider: Optional[str] = None          # Provider (openai/openrouter)
     model: Optional[str] = None             # Model
     categories: Optional[str] = None        # Categories
     max_tasks_arg: Optional[int] = None     # Max tasks argument
@@ -207,7 +187,12 @@ class RunResult:
 def parse_args_str(args_str: str) -> dict:
     """从参数字符串中提取关键信息"""
     info = {}
-    
+
+    # 提取 mode
+    mode_match = re.search(r'--mode\s+(\S+)', args_str)
+    if mode_match:
+        info['mode'] = mode_match.group(1)
+
     # 提取 provider
     provider_match = re.search(r'--provider\s+(\S+)', args_str)
     if provider_match:
@@ -456,6 +441,7 @@ def run_request(args_str: str, run_index: int, total_runs: int) -> RunResult:
             summary_file=output_info.get('summary_file'),
             error_message=error_msg or (f"退出码: {process.returncode}" if process.returncode != 0 else None),
             error_key=error_key,
+            mode=args_info.get('mode'),
             provider=args_info.get('provider'),
             model=args_info.get('model'),
             categories=args_info.get('categories'),
@@ -467,14 +453,14 @@ def run_request(args_str: str, run_index: int, total_runs: int) -> RunResult:
             vsp_postproc_sd_prompt=args_info.get('vsp_postproc_sd_prompt'),
             comt_sample_id=args_info.get('comt_sample_id'),
         )
-        
+
     except Exception as e:
         end_time = datetime.now()
         duration = end_time - start_time
-        
+
         print(f"\n❌ 运行 [{run_index}/{total_runs}] 异常")
         print(f"   错误: {e}")
-        
+
         return RunResult(
             run_index=run_index,
             args_str=args_str,
@@ -483,6 +469,7 @@ def run_request(args_str: str, run_index: int, total_runs: int) -> RunResult:
             end_time=end_time,
             duration=duration,
             error_message=str(e),
+            mode=args_info.get('mode'),
             provider=args_info.get('provider'),
             model=args_info.get('model'),
             categories=args_info.get('categories'),

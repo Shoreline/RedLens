@@ -64,7 +64,8 @@ from provider import get_provider, BaseProvider
 
 @dataclass
 class TestConfig:
-    provider: str                 # "openai" / "qwen" / "vsp"
+    mode: str = "direct"          # "direct" / "vsp" / "comt_vsp"
+    provider: str = "openrouter"  # "openai" / "openrouter"
     model_name: str               # e.g., "gpt-4o"
     temperature: float = 0.0
     top_p: float = 1.0
@@ -131,7 +132,7 @@ async def test_provider(
     测试单个 provider
     
     Args:
-        provider_name: provider 名称 ("openai" / "qwen" / "vsp")
+        provider_name: provider 名称 ("openai" / "openrouter")
         model_name: 模型名称
         test_case: 测试用例（如果为 None，使用第一个默认用例）
         custom_question: 自定义问题（如果提供，覆盖 test_case 的问题）

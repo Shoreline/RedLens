@@ -13,7 +13,7 @@ caffeinate -i python request.py \
   --model "openai/gpt-5"
 
 # 使用 CoMT-VSP（双任务模式，自动下载 CoMT 数据集）
-python request.py --provider comt_vsp --max_tasks 10
+python request.py --mode comt_vsp --max_tasks 10
 
 # 评估结果（新版结构）
 python mmsb_eval.py --jsonl_file output/job_1_tasks_10_.../results.jsonl
@@ -148,7 +148,7 @@ python request.py \
 
 ```bash
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --json_glob "~/code/MM-SafetyBench/data/processed_questions/*.json" \
   --image_base "~/Downloads/MM-SafetyBench_imgs/" \
   --consumers 3 \
@@ -166,7 +166,7 @@ python request.py \
 ```bash
 # 使用指定的 CoMT 样本（从 HuggingFace 自动下载数据集）
 python request.py \
-  --provider comt_vsp \
+  --mode comt_vsp \
   --comt_sample_id "deletion-0107" \
   --json_glob "~/code/MM-SafetyBench/data/processed_questions/*.json" \
   --image_base "~/Downloads/MM-SafetyBench_imgs/" \
@@ -177,7 +177,7 @@ python request.py \
 ```bash
 # 使用本地 CoMT 数据集 + 指定样本
 python request.py \
-  --provider comt_vsp \
+  --mode comt_vsp \
   --comt_data_path "~/code/CoMT/comt/data.jsonl" \
   --comt_sample_id "deletion-0107" \
   --json_glob "~/code/MM-SafetyBench/data/processed_questions/*.json" \
@@ -479,7 +479,7 @@ Job 元信息文件包含完整的配置和结果：
 job_num: 104
 job_folder: job_104_tasks_202_ComtVsp_qwen3-vl-8b_0104_193618
 timestamp: 01-04 19:36:18
-command: python request.py --provider comt_vsp --model ...
+command: python request.py --mode comt_vsp --model ...
 
 config:
   provider: comt_vsp
@@ -630,7 +630,7 @@ args_combo = [
     
     # 参数变体（列表）：会遍历每个变体
     [
-        '--provider comt_vsp --model "qwen/qwen3-vl-235b-a22b-instruct"',
+        '--mode comt_vsp --model "qwen/qwen3-vl-235b-a22b-instruct"',
         '--provider openrouter --model "google/gemini-2.5-flash"',
     ],
 ]

@@ -21,27 +21,26 @@ python request.py --model "gpt-4o" --max_tasks 50
 python request.py --max_tasks 50 --eval_model "gpt-5"
 
 # 5. 使用 OpenRouter
-python request.py --provider openrouter --model "anthropic/claude-3.5-sonnet" --max_tasks 10
+python request.py --model "anthropic/claude-3.5-sonnet" --max_tasks 10
 
-# 6. 自定义数据路径
-python request.py \
-  --json_glob "/custom/path/*.json" \
-  --image_base "/custom/images/" \
-  --max_tasks 10
+# 6. 使用 OpenAI
+python request.py --provider openai --model "gpt-5" --max_tasks 10
 
-# 7. 使用 VSP 并启用后处理（遮罩检测到的物体）
+# 7. 使用自部署 LLM
+python request.py --llm_base_url "http://autodl:8000/v1" --model "Qwen3-VL-8B" --max_tasks 10
+
+# 8. 使用 VSP 模式
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --max_tasks 10 \
   --vsp_postproc \
   --vsp_postproc_method visual_mask
 
-# 8. 使用 VSP 并启用后处理（修复检测到的物体）
+# 9. CoMT-VSP 双任务模式
 python request.py \
-  --provider vsp \
-  --max_tasks 10 \
-  --vsp_postproc \
-  --vsp_postproc_method visual_edit
+  --mode comt_vsp \
+  --comt_sample_id "deletion-0107" \
+  --max_tasks 10
 """
 
 import os, re, json, time, base64, glob, asyncio, random, contextlib, sys, socket, subprocess
@@ -170,6 +169,23 @@ def provider_to_camelcase(provider: str) -> str:
     parts = provider.split('_')
     return ''.join(part.capitalize() for part in parts)
 
+def get_folder_label(mode: str, provider: str, llm_base_url: str = None) -> str:
+    """
+    Get the CamelCase label for job folder naming.
+
+    - mode=direct, provider=openrouter → "Openrouter"
+    - mode=direct, provider=openai → "Openai"
+    - mode=direct, llm_base_url set → "Direct"
+    - mode=vsp → "Vsp"
+    - mode=comt_vsp → "ComtVsp"
+    """
+    if mode in ("vsp", "comt_vsp"):
+        return provider_to_camelcase(mode)
+    # direct mode
+    if llm_base_url:
+        return "Direct"
+    return provider_to_camelcase(provider)
+
 class ConsoleLogger:
     """
     Dual output: writes to both console and a log file.
@@ -195,7 +211,8 @@ class ConsoleLogger:
 
 @dataclass
 class RunConfig:
-    provider: str                 # "openai" / "qwen" / "vsp" / "comt_vsp"
+    mode: str                     # "direct" / "vsp" / "comt_vsp"
+    provider: str                 # "openai" / "openrouter" (LLM provider, all modes)
     model: str                    # e.g., "gpt-4o", "qwen2.5-vl-7b-fp8"
     temperature: float = 0.0
     top_p: float = 1.0
@@ -350,7 +367,7 @@ def img_to_b64(path: str) -> str:
     except Exception as e:
         raise IOError(f"读取图片文件失败 {expanded_path}: {e}")
 
-def create_prompt(item: Item, *, prompt_config: Optional[Dict]=None, provider: str = None) -> Dict[str, Any]:
+def create_prompt(item: Item, *, prompt_config: Optional[Dict]=None, mode: str = None) -> Dict[str, Any]:
     """
     生成"图文相间"的 prompt 结构（统一中间格式给 Provider）。
     返回结构:
@@ -373,8 +390,8 @@ def create_prompt(item: Item, *, prompt_config: Optional[Dict]=None, provider: s
     # 构建 meta 信息
     meta = {"category": item.category}
     
-    # VSP/CoMT-VSP provider 需要额外的 index 信息（用于匹配详细输出目录）
-    if provider in ["vsp", "comt_vsp"]:
+    # VSP/CoMT-VSP mode 需要额外的 index 信息（用于匹配详细输出目录）
+    if mode in ("vsp", "comt_vsp"):
         meta["index"] = item.index
     
     return {"parts": parts, "meta": meta}
@@ -475,7 +492,7 @@ async def producer(q: asyncio.Queue, items: Iterable[Item], *, cfg: RunConfig):
         elif count % 20 == 0:
             print(f"🔄 已生成 {count} 个任务...")
         
-        prompt_struct = create_prompt(item, provider=cfg.provider)
+        prompt_struct = create_prompt(item, mode=cfg.mode)
         await q.put(Task(item=item, prompt_struct=prompt_struct))
         count += 1
     
@@ -881,6 +898,7 @@ def _generate_summary_html(
     
     # 构建配置信息
     config_items = f'''
+        <p><strong>Mode:</strong> {cfg.mode}</p>
         <p><strong>Provider:</strong> {cfg.provider}</p>
         <p><strong>Model:</strong> {cfg.model}</p>
         <p><strong>Temperature:</strong> {cfg.temperature}</p>
@@ -890,7 +908,7 @@ def _generate_summary_html(
         config_items += f'<p><strong>Seed:</strong> {cfg.seed}</p>'
     if cfg.sampling_rate < 1.0:
         config_items += f'<p><strong>Sampling Rate:</strong> {cfg.sampling_rate}</p>'
-    if cfg.provider in ["vsp", "comt_vsp"] and cfg.vsp_postproc_enabled:
+    if cfg.mode in ("vsp", "comt_vsp") and cfg.vsp_postproc_enabled:
         config_items += f'<p><strong>Post-Processor:</strong> {cfg.vsp_postproc_backend}'
         if cfg.vsp_postproc_method:
             config_items += f' ({cfg.vsp_postproc_method})'
@@ -1181,8 +1199,8 @@ async def run_pipeline(
         image_types = ["SD"]
     
     # 如果使用 VSP，生成批量时间戳
-    # 为VSP类型的provider设置批次时间戳
-    if cfg.provider in ["vsp", "comt_vsp"]:
+    # 为VSP类型的mode设置批次时间戳
+    if cfg.mode in ("vsp", "comt_vsp"):
         cfg.vsp_batch_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         print(f"🔧 VSP 时间戳: {cfg.vsp_batch_timestamp}")
     
@@ -1336,7 +1354,10 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--provider", default="openai")  # openai / qwen / vsp / comt_vsp
+    parser.add_argument("--mode", default="direct", choices=["direct", "vsp", "comt_vsp"],
+                       help="执行模式: direct (直接调用LLM API), vsp (VSP子进程), comt_vsp (CoMT双任务+VSP)")
+    parser.add_argument("--provider", default="openrouter", choices=["openai", "openrouter"],
+                       help="LLM 提供商 (默认: openrouter)")
     parser.add_argument("--model", default="gpt-5")
     parser.add_argument("--json_glob", 
                        default="~/code/MM-SafetyBench/data/processed_questions/*.json",
@@ -1446,12 +1467,12 @@ if __name__ == "__main__":
         task_num = get_next_task_num()
         print(f"🔢 任务编号: {task_num}")
         
-        # 转换 provider 名称为 CamelCase
-        provider_camel = provider_to_camelcase(args.provider)
-        
+        # 生成文件夹标签（基于 mode + provider）
+        folder_label = get_folder_label(args.mode, args.provider, args.llm_base_url)
+
         # 创建临时 job 文件夹（不含 tasks 数量，稍后重命名）
-        # 格式：job_{num}_temp_{Provider}_{model}_{timestamp}
-        temp_job_folder = f"output/job_{task_num}_temp_{provider_camel}_{safe_model_name}_{timestamp}"
+        # 格式：job_{num}_temp_{Label}_{model}_{timestamp}
+        temp_job_folder = f"output/job_{task_num}_temp_{folder_label}_{safe_model_name}_{timestamp}"
         os.makedirs(temp_job_folder, exist_ok=True)
         print(f"📁 创建临时 job 文件夹: {temp_job_folder}")
         
@@ -1470,6 +1491,7 @@ if __name__ == "__main__":
         sys.exit(1)
     
     cfg = RunConfig(
+        mode=args.mode,
         provider=args.provider,
         model=args.model,
         temperature=args.temp,
@@ -1502,6 +1524,7 @@ if __name__ == "__main__":
     # ============ 保存运行配置（供 job_fix.py 读取）============
     if temp_job_folder:
         run_config_to_save = {
+            "mode": args.mode,
             "provider": args.provider,
             "model": args.model,
             "temperature": args.temp,
@@ -1529,7 +1552,7 @@ if __name__ == "__main__":
             json.dump(run_config_to_save, f, indent=2, ensure_ascii=False)
 
     # ============ SSH Tunnel (AutoDL) ============
-    if cfg.provider in ["vsp", "comt_vsp"]:
+    if cfg.mode in ("vsp", "comt_vsp"):
         if not ensure_ssh_tunnels():
             print("❌ SSH tunnels to AutoDL required but could not be established. Aborting.")
             sys.exit(1)
@@ -1567,10 +1590,10 @@ if __name__ == "__main__":
         timestamp = timestamp_match.group(1) if timestamp_match else datetime.now().strftime("%m%d_%H%M%S")
         
         safe_model_name = re.sub(r'[^\w\-.]', '_', args.model)
-        provider_camel = provider_to_camelcase(args.provider)
-        
-        # 最终文件夹名：job_{num}_tasks_{total}_{Provider}_{model}_{timestamp}
-        final_job_folder = f"output/job_{task_num}_tasks_{total_tasks}_{provider_camel}_{safe_model_name}_{timestamp}"
+        folder_label = get_folder_label(args.mode, args.provider, args.llm_base_url)
+
+        # 最终文件夹名：job_{num}_tasks_{total}_{Label}_{model}_{timestamp}
+        final_job_folder = f"output/job_{task_num}_tasks_{total_tasks}_{folder_label}_{safe_model_name}_{timestamp}"
         
         if os.path.exists(temp_job_folder):
             os.rename(temp_job_folder, final_job_folder)
@@ -1617,7 +1640,7 @@ if __name__ == "__main__":
         print(f"   耗时: {format_time(eval_duration)}\n")
         
         # 如果使用了 VSP 类型的provider，自动添加工具使用字段
-        if cfg.provider in ["vsp", "comt_vsp"]:
+        if cfg.mode in ("vsp", "comt_vsp"):
             print(f"{'='*80}")
             print(f"🔧 检测 VSP 工具使用情况")
             print(f"{'='*80}\n")
@@ -1675,7 +1698,7 @@ if __name__ == "__main__":
         print(f"总耗时: {format_time(total_duration)}")
         print(f"  - 生成答案: {format_time(request_duration)}")
         print(f"  - 评估答案: {format_time(eval_duration)}")
-        if cfg.provider in ["vsp", "comt_vsp"]:
+        if cfg.mode in ("vsp", "comt_vsp"):
             print(f"  - VSP 工具检测: {format_time(vsp_duration)}")
             print(f"  - 路径清理: {format_time(clean_duration)}")
         print(f"  - 计算指标: {format_time(metric_duration)}")
@@ -1685,7 +1708,7 @@ if __name__ == "__main__":
         print(f"\n⏭️  跳过评估步骤（已自动停止: {stop_reason}）")
         
         # 即使跳过评估，也要清理 VSP 路径
-        if cfg.provider in ["vsp", "comt_vsp"]:
+        if cfg.mode in ("vsp", "comt_vsp"):
             print(f"\n{'='*80}")
             print(f"🧹 清理输出中的敏感路径")
             print(f"{'='*80}\n")

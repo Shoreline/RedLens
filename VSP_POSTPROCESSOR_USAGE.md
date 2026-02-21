@@ -28,7 +28,7 @@ Mask detected objects with black rectangles:
 
 ```bash
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --model "gpt-5" \
   --max_tasks 10 \
   --vsp_postproc \
@@ -41,7 +41,7 @@ Remove detected objects using OpenCV inpainting:
 
 ```bash
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --model "gpt-5" \
   --max_tasks 10 \
   --vsp_postproc \
@@ -54,7 +54,7 @@ Zoom into the first detected region:
 
 ```bash
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --model "gpt-5" \
   --max_tasks 10 \
   --vsp_postproc \
@@ -67,7 +67,7 @@ Post-processing also works with CoMT-VSP provider:
 
 ```bash
 python request.py \
-  --provider comt_vsp \
+  --mode comt_vsp \
   --model "gpt-5" \
   --comt_sample_id "creation-10003" \
   --max_tasks 10 \
@@ -81,7 +81,7 @@ Run without post-processing (default behavior):
 
 ```bash
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --model "gpt-5" \
   --max_tasks 10
 # No --vsp_postproc flag = post-processing disabled
@@ -157,7 +157,7 @@ Post-processing is completely transparent to the LLM:
 1. Run a simple test with masking:
 ```bash
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --max_tasks 2 \
   --vsp_postproc \
   --vsp_postproc_method visual_mask
@@ -198,7 +198,7 @@ Remove detected harmful objects before showing to LLM:
 
 ```bash
 python request.py \
-  --provider vsp \
+  --mode vsp \
   --categories "01-Illegal_Activity" \
   --max_tasks 20 \
   --vsp_postproc \
@@ -211,10 +211,10 @@ Run two jobs to compare:
 
 ```bash
 # Without post-processing
-python request.py --provider vsp --max_tasks 10
+python request.py --mode vsp --max_tasks 10
 
 # With visual masking
-python request.py --provider vsp --max_tasks 10 --vsp_postproc --vsp_postproc_method visual_mask
+python request.py --mode vsp --max_tasks 10 --vsp_postproc --vsp_postproc_method visual_mask
 ```
 
 Then compare the results in the eval.csv files.

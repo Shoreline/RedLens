@@ -6,16 +6,16 @@ Control VSP's image post-processing from Mediator's command line:
 
 ```bash
 # Enable visual masking (black rectangles over detected objects)
-python request.py --provider vsp --max_tasks 10 --vsp_postproc --vsp_postproc_method visual_mask
+python request.py --mode vsp --max_tasks 10 --vsp_postproc --vsp_postproc_method visual_mask
 
 # Enable inpainting (remove detected objects)
-python request.py --provider vsp --max_tasks 10 --vsp_postproc --vsp_postproc_method visual_edit
+python request.py --mode vsp --max_tasks 10 --vsp_postproc --vsp_postproc_method visual_edit
 
 # Enable zoom (crop to detected region)
-python request.py --provider vsp --max_tasks 10 --vsp_postproc --vsp_postproc_method zoom_in
+python request.py --mode vsp --max_tasks 10 --vsp_postproc --vsp_postproc_method zoom_in
 
 # Disable (default)
-python request.py --provider vsp --max_tasks 10
+python request.py --mode vsp --max_tasks 10
 ```
 
 ## Three Simple Flags
@@ -37,39 +37,39 @@ python request.py --provider vsp --max_tasks 10
 
 ## Works With
 
-- ✅ `--provider vsp`
-- ✅ `--provider comt_vsp`
+- ✅ `--mode vsp`
+- ✅ `--mode comt_vsp`
 - ❌ Other providers (ignored)
 
 ## Example Commands
 
 ### Test with 5 tasks
 ```bash
-python request.py --provider vsp --max_tasks 5 --vsp_postproc --vsp_postproc_method visual_mask
+python request.py --mode vsp --max_tasks 5 --vsp_postproc --vsp_postproc_method visual_mask
 ```
 
 ### Full eval run
 ```bash
-python request.py --provider vsp --vsp_postproc --vsp_postproc_method visual_edit
+python request.py --mode vsp --vsp_postproc --vsp_postproc_method visual_edit
 ```
 
 ### With CoMT
 ```bash
-python request.py --provider comt_vsp --comt_sample_id "creation-10003" --max_tasks 10 --vsp_postproc --vsp_postproc_method visual_mask
+python request.py --mode comt_vsp --comt_sample_id "creation-10003" --max_tasks 10 --vsp_postproc --vsp_postproc_method visual_mask
 ```
 
 ### Specific categories
 ```bash
-python request.py --provider vsp --categories "01-Illegal_Activity" --max_tasks 20 --vsp_postproc --vsp_postproc_method visual_edit
+python request.py --mode vsp --categories "01-Illegal_Activity" --max_tasks 20 --vsp_postproc --vsp_postproc_method visual_edit
 ```
 
 ### With Stable Diffusion (Replicate)
 ```bash
 # Requires REPLICATE_API_TOKEN in environment
-python request.py --provider comt_vsp --comt_sample_id "deletion-0107" --max_tasks 1 --vsp_postproc --vsp_postproc_backend sd
+python request.py --mode comt_vsp --comt_sample_id "deletion-0107" --max_tasks 1 --vsp_postproc --vsp_postproc_backend sd
 
 # With custom prompt
-python request.py --provider vsp --max_tasks 5 --vsp_postproc --vsp_postproc_backend sd --vsp_postproc_sd_prompt "remove detected objects, natural lighting"
+python request.py --mode vsp --max_tasks 5 --vsp_postproc --vsp_postproc_backend sd --vsp_postproc_sd_prompt "remove detected objects, natural lighting"
 ```
 
 ## Verify It Works

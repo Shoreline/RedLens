@@ -20,7 +20,8 @@ from provider import VSPProvider
 @dataclass
 class RunConfig:
     """简化的运行配置"""
-    provider: str = "vsp"
+    mode: str = "vsp"
+    provider: str = "openrouter"
     model_name: str = "gpt-4o"
     temperature: float = 0.0
     max_tokens: int = 4096

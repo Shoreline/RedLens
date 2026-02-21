@@ -299,14 +299,21 @@ class VSPProvider(BaseProvider):
                 job_folder = os.path.abspath(job_folder)
             env["VSP_JOB_FOLDER"] = job_folder
         
-        # Pass custom LLM endpoint config to VSP subprocess
+        # LLM provider config for VSP subprocess
+        # Priority: --llm_base_url > --provider defaults
         if cfg and getattr(cfg, 'llm_base_url', None):
             env["LLM_BASE_URL"] = cfg.llm_base_url
-        if cfg and getattr(cfg, 'llm_api_key', None):
-            env["LLM_API_KEY"] = cfg.llm_api_key
-        elif cfg and getattr(cfg, 'llm_base_url', None):
-            # AutoGen/OpenAI SDK requires a non-empty api_key even if the server ignores it
-            env["LLM_API_KEY"] = "not-needed"
+            env["LLM_API_KEY"] = getattr(cfg, 'llm_api_key', None) or "not-needed"
+        elif cfg and getattr(cfg, 'provider', None) == "openrouter":
+            env["LLM_BASE_URL"] = "https://openrouter.ai/api/v1"
+            env["LLM_API_KEY"] = os.environ.get("OPENROUTER_API_KEY", "")
+        elif cfg and getattr(cfg, 'provider', None) == "openai":
+            # Don't set LLM_BASE_URL - use OpenAI default endpoint
+            env["LLM_API_KEY"] = os.environ.get("OPENAI_API_KEY", "")
+
+        # Pass openrouter_provider for VSP internal routing
+        if cfg and getattr(cfg, 'openrouter_provider', None):
+            env["OPENROUTER_PROVIDER"] = cfg.openrouter_provider
 
         # 传递 prebaked processor 需要的上下文信息
         if meta:
@@ -992,49 +999,45 @@ def get_provider(cfg: 'RunConfig') -> BaseProvider:
         os.environ.setdefault("HTTPS_PROXY", cfg.proxy)
         os.environ.setdefault("HTTP_PROXY", cfg.proxy)
 
-    if cfg.provider == "openai":
-        return OpenAIProvider()
-    elif cfg.provider == "openrouter":
-        return OpenRouterProvider()
-    elif cfg.provider == "qwen":
-        return QwenProvider(endpoint=os.environ.get("QWEN_ENDPOINT","http://127.0.0.1:8000"),
-                            api_key=os.environ.get("QWEN_API_KEY"))
-    elif cfg.provider == "vsp":
-        # 获取批量时间戳（必需）
+    mode = getattr(cfg, 'mode', 'direct')
+
+    if mode == "direct":
+        if getattr(cfg, 'llm_base_url', None):
+            # Self-deployed LLM: use OpenAI-compatible ChatCompletion client
+            return OpenRouterProvider(
+                api_key=getattr(cfg, 'llm_api_key', None) or "not-needed",
+                base_url=cfg.llm_base_url,
+            )
+        if cfg.provider == "openai":
+            return OpenAIProvider()
+        else:  # openrouter (default)
+            return OpenRouterProvider()
+
+    elif mode in ("vsp", "comt_vsp"):
         batch_timestamp = getattr(cfg, 'vsp_batch_timestamp', None)
-        
+
         # 使用 job_folder/details 作为输出目录（如果有 job_folder）
         job_folder = getattr(cfg, 'job_folder', None)
         if job_folder:
             output_dir = os.path.join(job_folder, "details")
         else:
-            output_dir = os.environ.get("VSP_OUTPUT_DIR", "output/vsp_details")
-        
-        return VSPProvider(
-            vsp_path=os.environ.get("VSP_PATH", "~/code/VisualSketchpad"),
-            output_dir=output_dir,
-            batch_timestamp=batch_timestamp
-        )
-    elif cfg.provider == "comt_vsp":
-        # CoMT-VSP Provider: 双任务模式
-        batch_timestamp = getattr(cfg, 'vsp_batch_timestamp', None)
-        comt_data_path = getattr(cfg, 'comt_data_path', None)
-        comt_sample_id = getattr(cfg, 'comt_sample_id', None)
-        
-        # 使用 job_folder/details 作为输出目录（如果有 job_folder）
-        job_folder = getattr(cfg, 'job_folder', None)
-        if job_folder:
-            output_dir = os.path.join(job_folder, "details")
-        else:
-            output_dir = os.environ.get("VSP_OUTPUT_DIR", "output/comt_vsp_details")
-        
-        return ComtVspProvider(
-            vsp_path=os.environ.get("VSP_PATH", "~/code/VisualSketchpad"),
-            output_dir=output_dir,
-            batch_timestamp=batch_timestamp,
-            comt_data_path=comt_data_path,
-            comt_sample_id=comt_sample_id
-        )
+            output_dir = os.environ.get("VSP_OUTPUT_DIR", f"output/{mode}_details")
+
+        if mode == "vsp":
+            return VSPProvider(
+                vsp_path=os.environ.get("VSP_PATH", "~/code/VisualSketchpad"),
+                output_dir=output_dir,
+                batch_timestamp=batch_timestamp,
+            )
+        else:  # comt_vsp
+            return ComtVspProvider(
+                vsp_path=os.environ.get("VSP_PATH", "~/code/VisualSketchpad"),
+                output_dir=output_dir,
+                batch_timestamp=batch_timestamp,
+                comt_data_path=getattr(cfg, 'comt_data_path', None),
+                comt_sample_id=getattr(cfg, 'comt_sample_id', None),
+            )
+
     else:
-        raise ValueError(f"Unknown provider: {cfg.provider}")
+        raise ValueError(f"Unknown mode: {mode}")
 

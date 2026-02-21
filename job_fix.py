@@ -19,7 +19,7 @@ from request import (
     Item, RunConfig, Task, create_prompt, send_with_retry,
     detect_error_from_answer, build_record_for_disk, write_jsonl,
     consumer, format_time, ensure_ssh_tunnels, clean_sensitive_paths,
-    MMSB_IMAGE_QUESTION_MAP, provider_to_camelcase,
+    MMSB_IMAGE_QUESTION_MAP, provider_to_camelcase, get_folder_label,
 )
 from provider import get_provider
 
@@ -50,18 +50,34 @@ def load_run_config(job_folder: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def infer_mode_provider_from_old(old_provider: str):
+    """
+    从旧 run_config.json 的 provider 字段推导 mode 和 provider。
+    旧格式: "openai"/"openrouter"/"vsp"/"comt_vsp"/"qwen"
+    新格式: mode="direct"/"vsp"/"comt_vsp", provider="openai"/"openrouter"
+    """
+    if old_provider in ("vsp", "comt_vsp"):
+        return old_provider, "openrouter"  # 旧 VSP 默认使用 OpenRouter
+    elif old_provider in ("openai", "openrouter"):
+        return "direct", old_provider
+    else:
+        # qwen or unknown → treat as direct + openrouter
+        return "direct", "openrouter"
+
+
 def parse_job_folder_name(folder_name: str):
-    """从 job 文件夹名提取 provider 和 model（run_config.json 不存在时的回退方案）"""
+    """从 job 文件夹名提取 mode, provider, model（run_config.json 不存在时的回退方案）"""
     basename = os.path.basename(folder_name)
     # job_182_tasks_153_ComtVsp_Qwen3-VL-8B-Instruct_0219_142044
     match = re.match(r'job_\d+_tasks_\d+_([A-Z][a-zA-Z]*)_(.+)_(\d{4}_\d{6})$', basename)
     if not match:
-        return None, None
-    provider_camel = match.group(1)
+        return None, None, None
+    label_camel = match.group(1)
     model = match.group(2)
     # CamelCase -> snake_case: ComtVsp -> comt_vsp
-    provider = re.sub(r'(?<!^)([A-Z])', r'_\1', provider_camel).lower()
-    return provider, model
+    label_snake = re.sub(r'(?<!^)([A-Z])', r'_\1', label_camel).lower()
+    mode, provider = infer_mode_provider_from_old(label_snake)
+    return mode, provider, model
 
 
 def detect_comt_sample_id(job_folder: str) -> Optional[str]:
@@ -140,7 +156,7 @@ async def run_fix_pipeline(items: List[Item], cfg: RunConfig):
     progress_lock = asyncio.Lock()
 
     for item in items:
-        prompt_struct = create_prompt(item, provider=cfg.provider)
+        prompt_struct = create_prompt(item, mode=cfg.mode)
         await q.put(Task(item=item, prompt_struct=prompt_struct))
 
     for _ in range(cfg.consumer_size):
@@ -247,16 +263,22 @@ def main():
     # ---- 2. 恢复原始运行配置 ----
     saved_cfg = load_run_config(job_folder)
     if saved_cfg:
-        provider = saved_cfg["provider"]
+        # 新格式 run_config.json 包含 mode 字段
+        if "mode" in saved_cfg:
+            mode = saved_cfg["mode"]
+            provider = saved_cfg["provider"]
+        else:
+            # 旧格式：从 provider 推导 mode
+            mode, provider = infer_mode_provider_from_old(saved_cfg["provider"])
         model = saved_cfg["model"]
         print(f"📋 配置来源: run_config.json")
     else:
-        provider, model = parse_job_folder_name(job_folder)
-        if not provider:
+        mode, provider, model = parse_job_folder_name(job_folder)
+        if not mode:
             print(f"❌ 无法从目录名解析配置: {os.path.basename(job_folder)}")
             sys.exit(1)
         print(f"📋 配置来源: 目录名解析（旧 job 无 run_config.json）")
-    print(f"   Provider: {provider}, Model: {model}")
+    print(f"   Mode: {mode}, Provider: {provider}, Model: {model}")
 
     # ---- 3. 读取并分析 results.jsonl ----
     jsonl_path = os.path.join(job_folder, "results.jsonl")
@@ -318,19 +340,19 @@ def main():
     consumers = args.consumers
     if consumers is None:
         if saved_cfg:
-            consumers = saved_cfg.get("consumers", 3 if provider in ["vsp", "comt_vsp"] else 10)
+            consumers = saved_cfg.get("consumers", 3 if mode in ("vsp", "comt_vsp") else 10)
         else:
-            consumers = 3 if provider in ["vsp", "comt_vsp"] else 10
+            consumers = 3 if mode in ("vsp", "comt_vsp") else 10
 
     # CoMT sample ID
     comt_sample_id = args.comt_sample_id
     if not comt_sample_id and saved_cfg:
         comt_sample_id = saved_cfg.get("comt_sample_id")
-    if not comt_sample_id and provider == "comt_vsp":
+    if not comt_sample_id and mode == "comt_vsp":
         comt_sample_id = detect_comt_sample_id(job_folder)
         if comt_sample_id:
             print(f"🎯 从 console.log 检测到 CoMT 样本: {comt_sample_id}")
-    if not comt_sample_id and provider == "comt_vsp":
+    if not comt_sample_id and mode == "comt_vsp":
         print(f"❌ CoMT-VSP 模式需要 comt_sample_id，请通过 --comt_sample_id 指定")
         sys.exit(1)
 
@@ -343,6 +365,7 @@ def main():
     openrouter_provider = saved_cfg.get("openrouter_provider") if saved_cfg else None
 
     cfg = RunConfig(
+        mode=mode,
         provider=provider,
         model=model,
         temperature=temperature,
@@ -359,7 +382,7 @@ def main():
     )
 
     # ---- 5. 环境准备 ----
-    if provider in ["vsp", "comt_vsp"]:
+    if mode in ("vsp", "comt_vsp"):
         if not ensure_ssh_tunnels():
             print("❌ SSH tunnels required but could not be established.")
             sys.exit(1)
@@ -396,7 +419,7 @@ def main():
         os.remove(retry_jsonl)
 
     # ---- 8. 清理路径 ----
-    if provider in ["vsp", "comt_vsp"] and os.path.exists(job_folder):
+    if mode in ("vsp", "comt_vsp") and os.path.exists(job_folder):
         clean_stats = clean_sensitive_paths(job_folder)
         if clean_stats["replacements"] > 0:
             print(f"🧹 路径清理: {clean_stats['replacements']} 处")
@@ -421,7 +444,7 @@ def main():
         eval_duration = time.time() - eval_start
         print(f"   评估耗时: {format_time(eval_duration)}")
 
-        if provider in ["vsp", "comt_vsp"]:
+        if mode in ("vsp", "comt_vsp"):
             add_vsp_tool_usage_field(jsonl_path)
 
         cal_metric(jsonl_path, scenario=None)
