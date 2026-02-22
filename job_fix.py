@@ -254,6 +254,8 @@ def main():
     parser.add_argument("--eval_model", default=None, help="评估模型（默认: 从原始配置读取）")
     parser.add_argument("--llm_base_url", default=None, help="自定义 LLM API base URL")
     parser.add_argument("--llm_api_key", default=None, help="自定义 LLM API key")
+    parser.add_argument("--no-ssh-tunnel", action="store_true",
+                       help="跳过自动 SSH tunnel（适用于本地运行或手动管理隧道）")
     args = parser.parse_args()
 
     # ---- 1. 定位 Job 目录 ----
@@ -382,7 +384,7 @@ def main():
     )
 
     # ---- 5. 环境准备 ----
-    if mode in ("vsp", "comt_vsp"):
+    if mode in ("vsp", "comt_vsp") and not args.no_ssh_tunnel:
         if not ensure_ssh_tunnels():
             print("❌ SSH tunnels required but could not be established.")
             sys.exit(1)

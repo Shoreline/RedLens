@@ -1441,6 +1441,8 @@ if __name__ == "__main__":
     parser.add_argument("--openrouter_provider", default=None,
                        help="指定 OpenRouter 底层提供商 slug（如 'together', 'parasail', 'novita'）。"
                             "仅对 --provider openrouter 有效")
+    parser.add_argument("--no-ssh-tunnel", action="store_true",
+                       help="跳过 VSP/CoMT-VSP 模式下的自动 SSH tunnel（适用于本地运行或手动管理隧道）")
 
     args = parser.parse_args()
     
@@ -1552,7 +1554,7 @@ if __name__ == "__main__":
             json.dump(run_config_to_save, f, indent=2, ensure_ascii=False)
 
     # ============ SSH Tunnel (AutoDL) ============
-    if cfg.mode in ("vsp", "comt_vsp"):
+    if cfg.mode in ("vsp", "comt_vsp") and not args.no_ssh_tunnel:
         if not ensure_ssh_tunnels():
             print("❌ SSH tunnels to AutoDL required but could not be established. Aborting.")
             sys.exit(1)
