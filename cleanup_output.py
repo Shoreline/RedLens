@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 清理 output/ 目录中任务数小于阈值的 job 文件夹，或清理特定任务编号的 job
+默认也会清理名称中含 'temp' 的 job 文件夹
 
 使用方法：
     # 预览将要删除的文件（不实际删除）
     python cleanup_output.py --dry-run
     
-    # 清理任务数 < 100 的 job（默认）
+    # 清理任务数 < 100 的 job + 含 'temp' 的 job（默认）
     python cleanup_output.py
     
     # 清理任务数 < 50 的 job
@@ -17,6 +18,9 @@
     
     # 清理多个任务编号的 job
     python cleanup_output.py --job-num 42 43 44
+    
+    # 保留含 'temp' 的 job
+    python cleanup_output.py --keep-temp
     
     # 自动确认删除（不需要交互）
     python cleanup_output.py --yes
@@ -93,6 +97,44 @@ def find_job_folders_to_cleanup(output_dir: str = 'output', threshold: int = 100
                 'path': folder_path,
                 'size': get_dir_size(folder_path)
             }
+    
+    return cleanup_candidates
+
+
+def find_temp_job_folders(output_dir: str = 'output') -> Dict[str, Dict]:
+    """
+    查找名称中包含 'temp' 的 job 文件夹
+    
+    Args:
+        output_dir: output 目录路径
+    
+    Returns:
+        {folder_name: {job_num, task_count, provider, model, timestamp, path, size}}
+    """
+    cleanup_candidates = {}
+    
+    job_folders = glob.glob(os.path.join(output_dir, 'job_*'))
+    
+    for folder_path in job_folders:
+        if not os.path.isdir(folder_path):
+            continue
+        
+        folder_name = os.path.basename(folder_path)
+        
+        if 'temp' not in folder_name.lower():
+            continue
+        
+        job_num, task_count, provider, model, timestamp = parse_job_folder_name(folder_name)
+        
+        cleanup_candidates[folder_name] = {
+            'job_num': job_num,
+            'task_count': task_count,
+            'provider': provider,
+            'model': model,
+            'timestamp': timestamp,
+            'path': folder_path,
+            'size': get_dir_size(folder_path)
+        }
     
     return cleanup_candidates
 
@@ -180,7 +222,7 @@ def print_cleanup_summary(cleanup_candidates: Dict[str, Dict]):
     
     total_size = 0
     
-    for i, (folder_name, info) in enumerate(sorted(cleanup_candidates.items(), key=lambda x: x[1]['job_num']), 1):
+    for i, (folder_name, info) in enumerate(sorted(cleanup_candidates.items(), key=lambda x: (x[1]['job_num'] or 0)), 1):
         job_num = info['job_num']
         task_count = info['task_count']
         provider = info['provider']
@@ -188,7 +230,10 @@ def print_cleanup_summary(cleanup_candidates: Dict[str, Dict]):
         timestamp = info['timestamp']
         size = info['size']
         
-        print(f"{i}. Job {job_num} (tasks={task_count})")
+        if job_num is not None:
+            print(f"{i}. Job {job_num} (tasks={task_count})")
+        else:
+            print(f"{i}. {folder_name} (temp)")
         print(f"   文件夹: {folder_name}")
         print(f"   Provider: {provider}")
         print(f"   Model: {model}")
@@ -272,6 +317,8 @@ def main():
                        help='output 目录路径（默认: output）')
     parser.add_argument('--dry-run', action='store_true',
                        help='预览模式：只显示将要删除的文件，不实际删除')
+    parser.add_argument('--keep-temp', action='store_true',
+                       help='保留名称中含 "temp" 的 job 文件夹（默认会一并清理）')
     parser.add_argument('--yes', '-y', action='store_true',
                        help='自动确认，不需要交互式询问')
     
@@ -305,6 +352,11 @@ def main():
     else:
         cleanup_candidates = find_job_folders_to_cleanup(args.output_dir, args.threshold)
     
+    # 默认也清理含 'temp' 的 job 文件夹
+    if not args.keep_temp:
+        temp_candidates = find_temp_job_folders(args.output_dir)
+        cleanup_candidates.update(temp_candidates)
+    
     if not cleanup_candidates:
         print("\n✅ 没有找到需要清理的 job 文件夹")
         return
@@ -332,12 +384,15 @@ def main():
     
     deleted_count = 0
     
-    for folder_name, info in sorted(cleanup_candidates.items(), key=lambda x: x[1]['job_num']):
+    for folder_name, info in sorted(cleanup_candidates.items(), key=lambda x: (x[1]['job_num'] or 0)):
         job_num = info['job_num']
         task_count = info['task_count']
         folder_path = info['path']
         
-        print(f"\n🗑️  删除 Job {job_num} (tasks={task_count}):")
+        if job_num is not None:
+            print(f"\n🗑️  删除 Job {job_num} (tasks={task_count}):")
+        else:
+            print(f"\n🗑️  删除 {folder_name} (temp):")
         
         if delete_job_folder(folder_path):
             deleted_count += 1

@@ -107,17 +107,16 @@ class OpenRouterProvider(BaseProvider):
                 }
             }
 
-        # 首次请求使用 with_raw_response 检查实际提供商
+        resp = await self.client.chat.completions.create(**request_params)
+
+        # 首次请求时从响应体检查实际提供商
         if openrouter_provider and not getattr(self, '_provider_logged', False):
-            raw_resp = await self.client.chat.completions.with_raw_response.create(**request_params)
-            actual_provider = raw_resp.headers.get('x-openrouter-provider', 'unknown')
+            # OpenRouter 在响应体中返回 "provider" 字段（如 "Alibaba"）
+            actual_provider = getattr(resp, 'provider', None) or 'unknown'
             print(f"🔗 OpenRouter 提供商路由: 请求=[{openrouter_provider}], 实际=[{actual_provider}]")
-            if actual_provider != openrouter_provider:
+            if actual_provider.lower() != openrouter_provider.lower():
                 print(f"   ⚠️  实际提供商与请求不符！请检查 provider slug 是否正确")
             self._provider_logged = True
-            resp = raw_resp.parse()
-        else:
-            resp = await self.client.chat.completions.create(**request_params)
 
         return (resp.choices[0].message.content or "").strip()
 
