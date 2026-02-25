@@ -60,12 +60,15 @@ class OpenAIProvider(BaseProvider):
         return (txt or "").strip()
 
 class OpenRouterProvider(BaseProvider):
-    def __init__(self, api_key: Optional[str] = None, base_url: str = "https://openrouter.ai/api/v1"):
+    def __init__(self, api_key: Optional[str] = None, base_url: str = "https://openrouter.ai/api/v1",
+                 capture_hidden_states: bool = False):
         from openai import AsyncOpenAI
         self.client = AsyncOpenAI(
             api_key=api_key or os.getenv("OPENROUTER_API_KEY"),
             base_url=base_url,
         )
+        self.capture_hidden_states = capture_hidden_states
+        self._hs_logged = False  # 仅首次打印 hidden states 检测日志
 
     @staticmethod
     def _to_chat_blocks(prompt_struct: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -118,7 +121,100 @@ class OpenRouterProvider(BaseProvider):
                 print(f"   ⚠️  实际提供商与请求不符！请检查 provider slug 是否正确")
             self._provider_logged = True
 
+        # 自部署端点：捕获 API 响应中的 hidden states
+        if self.capture_hidden_states:
+            self._maybe_save_hidden_states(resp, prompt_struct, cfg)
+
         return (resp.choices[0].message.content or "").strip()
+
+    def _maybe_save_hidden_states(self, resp, prompt_struct: Dict[str, Any], cfg: 'RunConfig') -> None:
+        """从自部署端点的 API 响应中提取并保存 hidden states。
+
+        OpenAI SDK 的 BaseModel 配置了 extra="allow"，因此 API 响应中的额外字段
+        （如 hidden_state）会保留在 resp.model_extra 中。
+        """
+        if not getattr(cfg, 'job_folder', None):
+            return
+
+        try:
+            # 从 pydantic model_extra 中提取额外字段
+            extra = getattr(resp, 'model_extra', None) or {}
+            hs_data = extra.get('hidden_state') or extra.get('hidden_states')
+
+            if not hs_data:
+                return
+
+            import numpy as np
+
+            # 首次检测到 hidden states 时打印日志
+            if not self._hs_logged:
+                print(f"🧠 检测到 API 响应中的 hidden states，自动保存到 job_folder/hidden_states/")
+                self._hs_logged = True
+
+            meta = prompt_struct.get("meta", {})
+            category = meta.get("category", "unknown")
+            index = meta.get("index", "0")
+            cat_num = category.split("-", 1)[0] if category and "-" in category else category
+            file_prefix = f"{cat_num}_{index}" if cat_num else index
+
+            hs_dir = os.path.join(cfg.job_folder, "hidden_states")
+            os.makedirs(hs_dir, exist_ok=True)
+
+            if isinstance(hs_data, dict):
+                # 单个 hidden state（单轮对话）
+                last_token = hs_data.get("last_token")
+                if last_token:
+                    arr = np.array(last_token, dtype=np.float32)
+                    np.save(os.path.join(hs_dir, f"{file_prefix}_q0_t0.npy"), arr)
+
+                    turns_meta = [{"question": 0, "turn": 0, "content_preview": ""}]
+                    with open(os.path.join(hs_dir, f"{file_prefix}_turns.json"), "w", encoding="utf-8") as f:
+                        json.dump(turns_meta, f, indent=2, ensure_ascii=False)
+
+                    self._save_hs_global_meta(hs_dir, hs_data, cfg)
+
+            elif isinstance(hs_data, list):
+                # 多个 hidden states（多轮对话）
+                turns_meta = []
+                for i, entry in enumerate(hs_data):
+                    hs = entry.get("hidden_state", entry) if isinstance(entry, dict) else {}
+                    last_token = hs.get("last_token")
+                    if last_token:
+                        arr = np.array(last_token, dtype=np.float32)
+                        np.save(os.path.join(hs_dir, f"{file_prefix}_q0_t{i}.npy"), arr)
+                        turns_meta.append({
+                            "question": 0,
+                            "turn": i,
+                            "content_preview": entry.get("content_preview", "") if isinstance(entry, dict) else "",
+                        })
+
+                if turns_meta:
+                    with open(os.path.join(hs_dir, f"{file_prefix}_turns.json"), "w", encoding="utf-8") as f:
+                        json.dump(turns_meta, f, indent=2, ensure_ascii=False)
+
+                # 从第一个 entry 保存全局 meta
+                if hs_data:
+                    first = hs_data[0] if isinstance(hs_data[0], dict) else {}
+                    hs = first.get("hidden_state", first) if isinstance(first, dict) else {}
+                    self._save_hs_global_meta(hs_dir, hs, cfg)
+
+        except ImportError:
+            print("Warning: numpy not available, skipping hidden states save")
+        except Exception as e:
+            print(f"Warning: Failed to save hidden states: {e}")
+
+    def _save_hs_global_meta(self, hs_dir: str, hs_data: dict, cfg: 'RunConfig') -> None:
+        """保存 hidden states 全局 meta.json（仅首次）"""
+        meta_path = os.path.join(hs_dir, "meta.json")
+        if not os.path.exists(meta_path):
+            meta_info = {
+                "layer": hs_data.get("layer", -1),
+                "hidden_dim": hs_data.get("hidden_dim"),
+                "dtype": "float32",
+                "model": hs_data.get("model", cfg.model),
+            }
+            with open(meta_path, "w") as f:
+                json.dump(meta_info, f, indent=2)
 
 
 class QwenProvider(BaseProvider):
@@ -1003,9 +1099,11 @@ def get_provider(cfg: 'RunConfig') -> BaseProvider:
     if mode == "direct":
         if getattr(cfg, 'llm_base_url', None):
             # Self-deployed LLM: use OpenAI-compatible ChatCompletion client
+            # 自部署端点可能返回 hidden_state，自动捕获并保存
             return OpenRouterProvider(
                 api_key=getattr(cfg, 'llm_api_key', None) or "not-needed",
                 base_url=cfg.llm_base_url,
+                capture_hidden_states=True,
             )
         if cfg.provider == "openai":
             return OpenAIProvider()

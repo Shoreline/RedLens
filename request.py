@@ -387,12 +387,8 @@ def create_prompt(item: Item, *, prompt_config: Optional[Dict]=None, mode: str =
     # 一图示例；如果条目有多图，你可以在 load 处扩展成列表再 append 多次
     parts.append({"type": "image", "b64": img_to_b64(item.image_path)})
 
-    # 构建 meta 信息
-    meta = {"category": item.category}
-    
-    # VSP/CoMT-VSP mode 需要额外的 index 信息（用于匹配详细输出目录）
-    if mode in ("vsp", "comt_vsp"):
-        meta["index"] = item.index
+    # 构建 meta 信息（index 始终包含，用于 hidden states 文件命名等）
+    meta = {"category": item.category, "index": item.index}
     
     return {"parts": parts, "meta": meta}
 

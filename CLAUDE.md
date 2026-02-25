@@ -63,7 +63,7 @@ python -m pytest tests/
 - **VSPProvider** — spawns VisualSketchpad as subprocess, extracts answers from debug logs
 - **ComtVspProvider** — sequential dual-task VSP (CoMT object detection first, then safety evaluation as follow-up in the same conversation)
 
-Execution mode is selected via `--mode` (`direct`/`vsp`/`comt_vsp`), and LLM provider via `--provider` (`openai`/`openrouter`, default `openrouter`). Factory function `get_provider()` dispatches based on mode first, then provider. OpenRouterProvider supports `--openrouter_provider` to pin a specific upstream provider (e.g. `together`, `alibaba`). All modes support `--llm_base_url` to override the default LLM endpoint (highest priority). When using a custom endpoint that returns `hidden_state` in the API response, VSP/CoMT-VSP providers automatically capture and save hidden states as per-turn `.npy` files in `{job_folder}/hidden_states/`.
+Execution mode is selected via `--mode` (`direct`/`vsp`/`comt_vsp`), and LLM provider via `--provider` (`openai`/`openrouter`, default `openrouter`). Factory function `get_provider()` dispatches based on mode first, then provider. OpenRouterProvider supports `--openrouter_provider` to pin a specific upstream provider (e.g. `together`, `alibaba`). All modes support `--llm_base_url` to override the default LLM endpoint (highest priority). When using a custom endpoint (`--llm_base_url`) that returns `hidden_state` in the API response, all modes (including direct) automatically capture and save hidden states as `.npy` files in `{job_folder}/hidden_states/`. Direct mode captures from the API response's extra fields; VSP/CoMT-VSP modes capture from the subprocess's `hidden_states.json`.
 
 ### Request Processing (`request.py`)
 
