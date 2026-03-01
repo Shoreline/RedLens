@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-对比不同 job 的同一 task 的 Hidden States 差异方向。
+对比不同 job 的 Hidden States 差异方向。
 
 用法：
     python compare_hidden_states.py 177 178
     python compare_hidden_states.py 177 178 --sub_task q1 --turn t0
+    python compare_hidden_states.py 177 178 --sub_task1 q1 --turn1 t0 --sub_task2 q2 --turn2 t0
     python compare_hidden_states.py 177 178 --detailed
 """
 
@@ -81,9 +82,9 @@ def write_summary(comp_dir: Path, args, dir1: Path, dir2: Path, matches: dict,
     summary = {
         "comp_num": int(comp_dir.name.split("_")[-1]),
         "timestamp": datetime.now().isoformat(),
-        "job1": {"num": args.job1, "dir": dir1.name},
-        "job2": {"num": args.job2, "dir": dir2.name},
-        "params": {"sub_task": args.sub_task, "turn": args.turn, "detailed": args.detailed},
+        "job1": {"num": args.job1, "dir": dir1.name, "sub_task": args.sub_task1, "turn": args.turn1},
+        "job2": {"num": args.job2, "dir": dir2.name, "sub_task": args.sub_task2, "turn": args.turn2},
+        "params": {"detailed": args.detailed},
         "matched_tasks": len(matches),
         "categories": sorted(d_by_cat.keys()),
         "results": {},
@@ -103,11 +104,19 @@ def write_summary(comp_dir: Path, args, dir1: Path, dir2: Path, matches: dict,
 # 数据加载
 # ============================================================
 
-def find_matching_files(dir1: Path, dir2: Path, sub_task: str = "q1", turn: str = "t0"):
-    """找到两个目录中共同的 {cat}_{index}_{sub_task}_{turn}.npy 文件。
+def find_matching_files(dir1: Path, dir2: Path,
+                        sub_task1: str = "q1", turn1: str = "t0",
+                        sub_task2: str = None, turn2: str = None):
+    """找到两个目录中共同 (cat, index) 的 hidden state 文件。
 
+    Job1 使用 {sub_task1}_{turn1}，Job2 使用 {sub_task2}_{turn2}（默认与 Job1 相同）。
     返回 {(cat, index): (path1, path2)}
     """
+    if sub_task2 is None:
+        sub_task2 = sub_task1
+    if turn2 is None:
+        turn2 = turn1
+
     hs1 = dir1 / "hidden_states"
     hs2 = dir2 / "hidden_states"
 
@@ -118,29 +127,20 @@ def find_matching_files(dir1: Path, dir2: Path, sub_task: str = "q1", turn: str 
         print(f"错误：{hs2} 不存在", file=sys.stderr)
         sys.exit(1)
 
-    suffix = f"_{sub_task}_{turn}.npy"
+    def collect_files(hs_dir: Path, sub_task: str, turn: str) -> dict:
+        suffix = f"_{sub_task}_{turn}.npy"
+        files = {}
+        for f in hs_dir.glob(f"*{suffix}"):
+            stem = f.stem
+            prefix = stem.removesuffix(f"_{sub_task}_{turn}")
+            parts = prefix.split("_", 1)
+            if len(parts) == 2:
+                cat, index = parts
+                files[(cat, index)] = f
+        return files
 
-    # 收集 dir1 的文件，解析 (cat, index)
-    files1 = {}
-    for f in hs1.glob(f"*{suffix}"):
-        # 文件名格式: {cat}_{index}_{sub_task}_{turn}.npy
-        # 例如: 08_0_q1_t0.npy → cat="08", index="0"
-        stem = f.stem  # 08_0_q1_t0
-        prefix = stem.removesuffix(f"_{sub_task}_{turn}")  # 08_0
-        parts = prefix.split("_", 1)
-        if len(parts) == 2:
-            cat, index = parts
-            files1[(cat, index)] = f
-
-    # 收集 dir2 的文件
-    files2 = {}
-    for f in hs2.glob(f"*{suffix}"):
-        stem = f.stem
-        prefix = stem.removesuffix(f"_{sub_task}_{turn}")
-        parts = prefix.split("_", 1)
-        if len(parts) == 2:
-            cat, index = parts
-            files2[(cat, index)] = f
+    files1 = collect_files(hs1, sub_task1, turn1)
+    files2 = collect_files(hs2, sub_task2, turn2)
 
     # 求交集
     common_keys = set(files1.keys()) & set(files2.keys())
@@ -459,31 +459,43 @@ def plot_results(results: dict, output_path: Path, detailed: bool = False, basel
 
 def main():
     parser = argparse.ArgumentParser(
-        description="对比不同 job 的同一 task 的 Hidden States 差异方向",
+        description="对比不同 job 的 Hidden States 差异方向",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
   python compare_hidden_states.py 177 178
   python compare_hidden_states.py 177 178 --sub_task q1 --turn t0
+  python compare_hidden_states.py 177 178 --sub_task1 q1 --turn1 t0 --sub_task2 q2 --turn2 t0
   python compare_hidden_states.py 177 178 --detailed
         """,
     )
     parser.add_argument("job1", type=int, help="第一个 job number")
     parser.add_argument("job2", type=int, help="第二个 job number")
-    parser.add_argument("--sub_task", default="q1", help="子任务标识（默认: q1）")
-    parser.add_argument("--turn", default="t0", help="轮次标识（默认: t0）")
+    parser.add_argument("--sub_task", default="q1",
+                        help="两个 job 共用的子任务标识（默认: q1），被 --sub_task1/2 覆盖")
+    parser.add_argument("--turn", default="t0",
+                        help="两个 job 共用的轮次标识（默认: t0），被 --turn1/2 覆盖")
+    parser.add_argument("--sub_task1", default=None, help="Job1 的子任务标识（覆盖 --sub_task）")
+    parser.add_argument("--sub_task2", default=None, help="Job2 的子任务标识（覆盖 --sub_task）")
+    parser.add_argument("--turn1", default=None, help="Job1 的轮次标识（覆盖 --turn）")
+    parser.add_argument("--turn2", default=None, help="Job2 的轮次标识（覆盖 --turn）")
     parser.add_argument("--detailed", action="store_true", help="输出 PCA 分析 + 跨 category baseline")
     args = parser.parse_args()
+
+    # 合并共用 / 独立参数
+    args.sub_task1 = args.sub_task1 or args.sub_task
+    args.sub_task2 = args.sub_task2 or args.sub_task
+    args.turn1 = args.turn1 or args.turn
+    args.turn2 = args.turn2 or args.turn
 
     # 解析 job 目录
     dir1 = resolve_job_dir(args.job1)
     dir2 = resolve_job_dir(args.job2)
-    print(f"Job {args.job1}: {dir1.name}")
-    print(f"Job {args.job2}: {dir2.name}")
-    print(f"对比: {args.sub_task}_{args.turn}")
+    print(f"Job {args.job1}: {dir1.name}  [{args.sub_task1}_{args.turn1}]")
+    print(f"Job {args.job2}: {dir2.name}  [{args.sub_task2}_{args.turn2}]")
 
     # 找匹配文件
-    matches = find_matching_files(dir1, dir2, args.sub_task, args.turn)
+    matches = find_matching_files(dir1, dir2, args.sub_task1, args.turn1, args.sub_task2, args.turn2)
     print(f"共找到 {len(matches)} 个匹配的 task")
 
     # 计算差异
