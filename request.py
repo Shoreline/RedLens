@@ -126,6 +126,48 @@ def ensure_ssh_tunnels():
     print(f"❌ SSH tunnels did not become active within 5s")
     return False
 
+# ============ Cloudflare Tunnel Management ============
+
+def ensure_cf_tunnels() -> Optional[Dict[str, str]]:
+    """
+    读取 Cloudflare Tunnel 配置并验证可达性。
+    返回 {service_name: url} 映射，失败返回 None。
+    """
+    from tools.cf_tunnel import load_tunnel_config
+    import urllib.request
+
+    tunnel_urls = load_tunnel_config()
+    if not tunnel_urls:
+        print("❌ 未找到 Cloudflare Tunnel 配置")
+        print("   请先运行: python tools/cf_tunnel.py start")
+        return None
+
+    print(f"☁️  Cloudflare Tunnel 配置已加载 ({len(tunnel_urls)} 个服务)")
+
+    # 验证至少一个 URL 可达
+    reachable = 0
+    for name, url in tunnel_urls.items():
+        try:
+            urllib.request.urlopen(url, timeout=10)
+            print(f"   ✅ {name}: {url}")
+            reachable += 1
+        except urllib.error.HTTPError as e:
+            # HTTP 错误但连接成功（如 404），tunnel 可达
+            if e.code < 500:
+                print(f"   ✅ {name}: {url}")
+                reachable += 1
+            else:
+                print(f"   ⚠️  {name}: {url} (HTTP {e.code})")
+        except Exception as e:
+            print(f"   ❌ {name}: {url} ({type(e).__name__})")
+
+    if reachable == 0:
+        print("❌ 所有 tunnel 均不可达，请重新运行: python tools/cf_tunnel.py start")
+        return None
+
+    print(f"✅ Cloudflare Tunnels 就绪 ({reachable}/{len(tunnel_urls)} 可达)")
+    return tunnel_urls
+
 # ============ Task Counter（单调递增的任务编号）============
 
 TASK_COUNTER_FILE = "output/.task_counter"
@@ -244,6 +286,8 @@ class RunConfig:
     llm_api_key: Optional[str] = None
     # OpenRouter provider routing
     openrouter_provider: Optional[str] = None  # 指定 OpenRouter 底层提供商（如 "together", "parasail", "novita"）
+    # Cloudflare Tunnel URLs (populated at runtime by --tunnel cf)
+    tunnel_urls: Optional[Dict[str, str]] = None  # {"llm": "https://...", "grounding_dino": "https://...", ...}
 
 # ============ 数据与 Prompt ============
 
@@ -1437,11 +1481,16 @@ if __name__ == "__main__":
     parser.add_argument("--openrouter_provider", default=None,
                        help="指定 OpenRouter 底层提供商 slug（如 'together', 'parasail', 'novita'）。"
                             "仅对 --provider openrouter 有效")
+    parser.add_argument("--tunnel", default="ssh", choices=["ssh", "cf", "none"],
+                       help="Tunnel 模式: ssh (默认, SSH port forwarding), cf (Cloudflare Tunnel), none (跳过)")
     parser.add_argument("--no-ssh-tunnel", action="store_true",
-                       help="跳过 VSP/CoMT-VSP 模式下的自动 SSH tunnel（适用于本地运行或手动管理隧道）")
+                       help="[已废弃] 等价于 --tunnel none")
 
     args = parser.parse_args()
-    
+
+    # --no-ssh-tunnel 向后兼容
+    tunnel_mode = "none" if args.no_ssh_tunnel else args.tunnel
+
     # 验证 image_types 必须在 MMSB_IMAGE_QUESTION_MAP 中
     invalid_types = [t for t in args.image_types if t not in MMSB_IMAGE_QUESTION_MAP]
     if invalid_types:
@@ -1545,15 +1594,23 @@ if __name__ == "__main__":
             "vsp_postproc_backend": args.vsp_postproc_backend,
             "vsp_postproc_method": args.vsp_postproc_method,
             "vsp_postproc_fallback": args.vsp_postproc_fallback,
+            "tunnel": tunnel_mode,
         }
         with open(os.path.join(temp_job_folder, "run_config.json"), "w", encoding="utf-8") as f:
             json.dump(run_config_to_save, f, indent=2, ensure_ascii=False)
 
-    # ============ SSH Tunnel (AutoDL) ============
-    if cfg.mode in ("vsp", "comt_vsp") and not args.no_ssh_tunnel:
-        if not ensure_ssh_tunnels():
-            print("❌ SSH tunnels to AutoDL required but could not be established. Aborting.")
-            sys.exit(1)
+    # ============ Tunnel (AutoDL) ============
+    if cfg.mode in ("vsp", "comt_vsp") and tunnel_mode != "none":
+        if tunnel_mode == "cf":
+            tunnel_urls = ensure_cf_tunnels()
+            if not tunnel_urls:
+                print("❌ Cloudflare Tunnels required but not available. Aborting.")
+                sys.exit(1)
+            cfg.tunnel_urls = tunnel_urls
+        else:  # ssh
+            if not ensure_ssh_tunnels():
+                print("❌ SSH tunnels to AutoDL required but could not be established. Aborting.")
+                sys.exit(1)
 
     # ============ 步骤 1: Request（生成答案）============
     print(f"\n{'='*80}")

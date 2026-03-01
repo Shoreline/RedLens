@@ -27,6 +27,12 @@ python request.py --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alib
 # VSP mode (use lower concurrency)
 python request.py --mode vsp --consumers 3 --max_tasks 50
 
+# VSP mode with Cloudflare Tunnel (替代 SSH，跨国加速 ~400x)
+python tools/cf_tunnel.py start                          # 启动 tunnels（首次自动安装 cloudflared）
+python request.py --mode vsp --tunnel cf --max_tasks 50  # 使用 CF tunnel
+python tools/cf_tunnel.py status                         # 查看状态
+python tools/cf_tunnel.py stop                           # 停止
+
 # CoMT-VSP dual-task mode
 python request.py --mode comt_vsp --comt_sample_id "deletion-0107" --max_tasks 20
 
@@ -65,6 +71,16 @@ python -m pytest tests/
 
 Execution mode is selected via `--mode` (`direct`/`vsp`/`comt_vsp`), and LLM provider via `--provider` (`openai`/`openrouter`, default `openrouter`). Factory function `get_provider()` dispatches based on mode first, then provider. OpenRouterProvider supports `--openrouter_provider` to pin a specific upstream provider (e.g. `together`, `alibaba`). All modes support `--llm_base_url` to override the default LLM endpoint (highest priority). When using a custom endpoint (`--llm_base_url`) that returns `hidden_state` in the API response, all modes (including direct) automatically capture and save hidden states as `.npy` files in `{job_folder}/hidden_states/`. Direct mode captures from the API response's extra fields; VSP/CoMT-VSP modes capture from the subprocess's `hidden_states.json`.
 
+### Tunnel 传输 (`--tunnel`)
+
+VSP/CoMT-VSP 模式需要与 AutoDL 远程主机上的服务通信。`--tunnel` 参数控制传输方式：
+
+- **`ssh`**（默认）— SSH 端口转发，跨国场景受 GFW 限速（~3-5 KB/s）
+- **`cf`** — Cloudflare Quick Tunnel，通过 CDN 中继，跨国 ~2 MB/s
+- **`none`** — 不建立 tunnel（服务已可直接访问时使用）
+
+CF Tunnel 通过 `tools/cf_tunnel.py` 管理，在 AutoDL 上启动 `cloudflared` 进程暴露服务端口，分配 `*.trycloudflare.com` URL。配置保存在 `.cf_tunnels.json`，运行时通过环境变量传递给 VSP 子进程。详见 docs/cf_tunnel.md。
+
 ### Request Processing (`request.py`)
 
 Uses async producer-consumer pattern with configurable `--consumers` count. Items are loaded from MM-SafetyBench JSON files, images encoded to base64, then queued for concurrent LLM calls. Includes failure detection (regex-based) with auto-retry. Supports `--sampling_rate` for partial dataset runs and `--rate_limit_qps` for rate limiting.
@@ -96,6 +112,7 @@ All output goes to `output/`. Detailed structure documented in docs/output_struc
 | `cleanup_output.py` | Cleans up output directories |
 | `view_jsonl.py` | JSONL file viewer/converter |
 | `compare_hidden_states.py` | Cross-job hidden states difference direction analysis |
+| `tools/cf_tunnel.py` | Cloudflare Tunnel 管理（start/stop/status） |
 
 ## Configuration
 
@@ -105,6 +122,9 @@ API keys are managed via `.env` file (loaded by python-dotenv). Key variables:
 - `QWEN_ENDPOINT`, `QWEN_API_KEY` — Qwen provider
 - `VSP_PATH` — path to VisualSketchpad installation
 - `COMT_DATA_PATH` — local CoMT dataset path (auto-downloads from HuggingFace if missing)
+
+AutoDL 远程日志路径（通过 `ssh seetacloud` 访问）：
+- Qwen/LLM server log: `/root/projects/hidden_states/logs/qwen.log`
 
 ## Conventions
 
@@ -118,4 +138,5 @@ API keys are managed via `.env` file (loaded by python-dotenv). Key variables:
 - docs/cli_reference.md — request.py 全部命令行参数
 - docs/output_structure.md — output 目录详细结构和字段说明
 - docs/vsp_postprocessor.md — VSP 后处理器指南
+- docs/cf_tunnel.md — Cloudflare Tunnel 使用与原理
 - COMT_GUIDE.md — CoMT 模式完整指南

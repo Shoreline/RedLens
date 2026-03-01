@@ -418,6 +418,18 @@ class VSPProvider(BaseProvider):
         if hasattr(self, 'comt_sample_id') and self.comt_sample_id:
             env["VSP_COMT_SAMPLE_ID"] = self.comt_sample_id
 
+        # Cloudflare Tunnel: 传递 vision tool 端点 URL
+        tunnel_urls = getattr(cfg, 'tunnel_urls', None)
+        if tunnel_urls:
+            if 'grounding_dino' in tunnel_urls:
+                env["VSP_GROUNDING_DINO_ADDRESS"] = tunnel_urls['grounding_dino']
+            if 'depth_anything' in tunnel_urls:
+                env["VSP_DEPTH_ANYTHING_ADDRESS"] = tunnel_urls['depth_anything']
+            if 'som' in tunnel_urls:
+                env["VSP_SOM_ADDRESS"] = tunnel_urls['som']
+            if 'llm' in tunnel_urls:
+                env["LLM_BASE_URL"] = tunnel_urls['llm'] + "/v1"
+
         process = None
         try:
             process = await asyncio.create_subprocess_exec(
