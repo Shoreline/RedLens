@@ -1,14 +1,18 @@
 """
 Job Fix - 断点重传
 
-根据已完成 job 的 results.jsonl，识别失败任务并重新执行。
-成功结果保持不变，只重跑失败的部分，最后合并回原文件。
+根据已完成 job 的 results.jsonl，识别失败任务和缺失任务并重新执行。
+成功结果保持不变，只重跑失败/缺失的部分，最后合并回原文件。
+
+支持检测两类问题：
+  1. 失败任务 — 已写入 results.jsonl 但带有 error_key 的记录
+  2. 缺失任务 — 因中断（如 Ctrl+C）未写入 results.jsonl 的任务
 
 用法:
     python job_fix.py 182
     python job_fix.py 182 --consumers 3
     python job_fix.py 182 --skip_eval
-    python job_fix.py 182 --dry_run          # 只查看失败任务，不执行
+    python job_fix.py 182 --dry_run          # 只查看失败/缺失任务，不执行
 """
 
 import os, re, json, sys, glob, time, asyncio, argparse, shutil, random
@@ -18,20 +22,29 @@ from typing import List, Dict, Any, Optional
 from request import (
     Item, RunConfig, Task, create_prompt, send_with_retry,
     detect_error_from_answer, build_record_for_disk, write_jsonl,
-    consumer, format_time, ensure_ssh_tunnels, clean_sensitive_paths,
+    consumer, format_time, ensure_ssh_tunnels, ensure_cf_tunnels,
+    clean_sensitive_paths,
     MMSB_IMAGE_QUESTION_MAP, provider_to_camelcase, get_folder_label,
+    load_mm_safety_by_image_types,
 )
+from pseudo_random_sampler import sample_by_category
 from provider import get_provider
 
 
 # ============ Job 目录定位 ============
 
 def find_job_folder(job_num: int) -> str:
-    pattern = f"output/job_{job_num}_tasks_*"
-    matches = glob.glob(pattern)
+    # 同时匹配正常目录 (job_N_tasks_*) 和中断的临时目录 (job_N_temp_*)
+    patterns = [
+        f"output/job_{job_num}_tasks_*",
+        f"output/job_{job_num}_temp_*",
+    ]
+    matches = []
+    for p in patterns:
+        matches.extend(glob.glob(p))
     if not matches:
         print(f"❌ 未找到 job {job_num} 的输出目录")
-        print(f"   搜索模式: {pattern}")
+        print(f"   搜索模式: {patterns}")
         sys.exit(1)
     if len(matches) > 1:
         print(f"⚠️  找到多个匹配目录，使用最新的:")
@@ -113,6 +126,84 @@ def load_results(jsonl_path: str):
             else:
                 success.append(record)
     return success, failed
+
+
+def rebuild_expected_items(saved_cfg: Dict[str, Any], max_tasks: Optional[int] = None) -> Optional[List[Item]]:
+    """根据 run_config.json 重建原始运行的完整任务列表。
+
+    Args:
+        saved_cfg: run_config.json 内容
+        max_tasks: 从 job 文件夹名解析的总任务数（用于截断）
+
+    Returns:
+        Item 列表，如果缺少必要字段则返回 None
+    """
+    json_glob = saved_cfg.get("json_glob")
+    image_base = saved_cfg.get("image_base")
+    image_types = saved_cfg.get("image_types")
+    if not json_glob or not image_base or not image_types:
+        return None
+
+    categories = saved_cfg.get("categories")
+    sampling_rate = saved_cfg.get("sampling_rate", 1.0)
+    sampling_seed = saved_cfg.get("sampling_seed", 42)
+
+    # 加载数据（与 request.py 相同逻辑）
+    items_gen = load_mm_safety_by_image_types(json_glob, image_base, image_types, categories)
+
+    if sampling_rate < 1.0:
+        all_items = list(items_gen)
+        items_as_dicts = [
+            {
+                'index': item.index,
+                'category': item.category,
+                'question': item.question,
+                'image_path': item.image_path,
+                'image_type': item.image_type,
+            }
+            for item in all_items
+        ]
+        sampled_dicts, _ = sample_by_category(
+            items_as_dicts,
+            seed=sampling_seed,
+            sampling_rate=sampling_rate,
+            category_field='category'
+        )
+        expected = [
+            Item(
+                index=d['index'],
+                category=d['category'],
+                question=d['question'],
+                image_path=d['image_path'],
+                image_type=d['image_type']
+            )
+            for d in sampled_dicts
+        ]
+    else:
+        expected = list(items_gen)
+
+    # max_tasks 截断（与 producer 逻辑一致）
+    if max_tasks is not None and len(expected) > max_tasks:
+        expected = expected[:max_tasks]
+
+    return expected
+
+
+def detect_missing_items(
+    expected_items: List[Item],
+    existing_keys: set,
+) -> List[Item]:
+    """对比期望任务列表和已有记录，返回缺失的 Item 列表。"""
+    return [
+        item for item in expected_items
+        if (item.category, item.index) not in existing_keys
+    ]
+
+
+def parse_max_tasks_from_folder(folder_name: str) -> Optional[int]:
+    """从 job 文件夹名提取 max_tasks 数（如 job_245_tasks_202_... -> 202）"""
+    match = re.search(r'_tasks_(\d+)_', os.path.basename(folder_name))
+    return int(match.group(1)) if match else None
 
 
 def records_to_items(records: List[Dict]) -> List[Item]:
@@ -289,33 +380,69 @@ def main():
         sys.exit(1)
 
     success_records, failed_records = load_results(jsonl_path)
-    total = len(success_records) + len(failed_records)
+    recorded_total = len(success_records) + len(failed_records)
+
+    # ---- 3b. 检测缺失任务（因中断未写入 JSONL 的任务）----
+    missing_items = []
+    if saved_cfg:
+        # 优先使用 run_config 中保存的 max_tasks，否则从文件夹名推断
+        max_tasks = saved_cfg.get("max_tasks") or parse_max_tasks_from_folder(job_folder)
+        expected_items = rebuild_expected_items(saved_cfg, max_tasks)
+        if expected_items is not None:
+            existing_keys = set()
+            for r in success_records + failed_records:
+                o = r.get("origin", {})
+                existing_keys.add((o.get("category"), o.get("index")))
+            expected_keys = {(item.category, item.index) for item in expected_items}
+
+            # 验证：已记录的 key 应该是期望集合的子集
+            unexpected = existing_keys - expected_keys
+            if unexpected:
+                print(f"\n⚠️  发现 {len(unexpected)} 个已记录任务不在期望集合中（采样算法可能已变更），跳过缺失检测")
+                expected_items = None
+            else:
+                missing_items = detect_missing_items(expected_items, existing_keys)
+    else:
+        expected_items = None
+
+    expected_total = len(expected_items) if expected_items is not None else recorded_total
 
     print(f"\n📊 任务统计:")
-    print(f"   总计: {total}")
+    print(f"   期望总数: {expected_total}")
+    print(f"   已记录: {recorded_total}")
     print(f"   ✅ 成功: {len(success_records)}")
     print(f"   ❌ 失败: {len(failed_records)}")
+    if missing_items:
+        print(f"   ⚠️  缺失: {len(missing_items)}（中断导致未写入）")
+    elif expected_items is None and saved_cfg is None:
+        print(f"   ⚠️  无 run_config.json，无法检测缺失任务")
 
-    if not failed_records:
-        print(f"\n✅ 没有失败的任务，无需重试！")
+    if not failed_records and not missing_items:
+        print(f"\n✅ 没有失败或缺失的任务，无需重试！")
         return
 
     # 错误分类统计
-    error_summary: Dict[str, int] = {}
-    for r in failed_records:
-        ek = r.get("error_key", "unknown")
-        error_summary[ek] = error_summary.get(ek, 0) + 1
-    print(f"\n   错误类型分布:")
-    for ek, count in sorted(error_summary.items(), key=lambda x: -x[1]):
-        print(f"     {ek}: {count} 个")
+    if failed_records:
+        error_summary: Dict[str, int] = {}
+        for r in failed_records:
+            ek = r.get("error_key", "unknown")
+            error_summary[ek] = error_summary.get(ek, 0) + 1
+        print(f"\n   错误类型分布:")
+        for ek, count in sorted(error_summary.items(), key=lambda x: -x[1]):
+            print(f"     {ek}: {count} 个")
 
     # ---- dry_run 模式 ----
     if args.dry_run:
-        print(f"\n🔍 失败任务详情:")
-        for r in failed_records:
-            o = r.get("origin", {})
-            em = (r.get("error_message") or "")[:80]
-            print(f"   [{o.get('category')}/{o.get('index')}] {em}")
+        if failed_records:
+            print(f"\n🔍 失败任务详情 ({len(failed_records)} 个):")
+            for r in failed_records:
+                o = r.get("origin", {})
+                em = (r.get("error_message") or "")[:80]
+                print(f"   [{o.get('category')}/{o.get('index')}] {em}")
+        if missing_items:
+            print(f"\n🔍 缺失任务详情 ({len(missing_items)} 个):")
+            for item in missing_items:
+                print(f"   [{item.category}/{item.index}] (未写入 JSONL)")
         return
 
     # ---- 4. 构建 RunConfig ----
@@ -383,20 +510,35 @@ def main():
         openrouter_provider=openrouter_provider,
     )
 
-    # ---- 5. 环境准备 ----
-    if mode in ("vsp", "comt_vsp") and not args.no_ssh_tunnel:
-        if not ensure_ssh_tunnels():
-            print("❌ SSH tunnels required but could not be established.")
-            sys.exit(1)
+    # ---- 5. 环境准备（tunnel）----
+    tunnel_mode = saved_cfg.get("tunnel", "ssh") if saved_cfg else "ssh"
+    if mode in ("vsp", "comt_vsp") and tunnel_mode != "none" and not args.no_ssh_tunnel:
+        if tunnel_mode == "cf":
+            tunnel_urls = ensure_cf_tunnels()
+            if not tunnel_urls:
+                print("❌ Cloudflare Tunnels required but not available.")
+                sys.exit(1)
+            cfg.tunnel_urls = tunnel_urls
+        else:  # ssh
+            if not ensure_ssh_tunnels():
+                print("❌ SSH tunnels required but could not be established.")
+                sys.exit(1)
         cfg.vsp_batch_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         print(f"🔧 VSP 时间戳: {cfg.vsp_batch_timestamp}")
 
     # ---- 6. 执行重试 ----
     failed_items = records_to_items(failed_records)
-    print(f"\n🚀 开始重试 {len(failed_items)} 个失败任务...\n")
+    retry_items = failed_items + missing_items
+
+    parts = []
+    if failed_items:
+        parts.append(f"{len(failed_items)} 个失败")
+    if missing_items:
+        parts.append(f"{len(missing_items)} 个缺失")
+    print(f"\n🚀 开始重试 {' + '.join(parts)}，共 {len(retry_items)} 个任务...\n")
 
     retry_start = time.time()
-    stop_reason = asyncio.run(run_fix_pipeline(failed_items, cfg))
+    stop_reason = asyncio.run(run_fix_pipeline(retry_items, cfg))
     retry_duration = time.time() - retry_start
 
     if stop_reason:
@@ -415,7 +557,7 @@ def main():
     print(f"   重试任务: {retry_count}")
     print(f"   新增成功: {new_success}")
     print(f"   仍然失败: {still_failed}")
-    print(f"   最终成功: {len(success_records) + new_success}/{total}")
+    print(f"   最终成功: {len(success_records) + new_success}/{expected_total}")
 
     if os.path.exists(retry_jsonl):
         os.remove(retry_jsonl)

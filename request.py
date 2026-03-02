@@ -1135,14 +1135,16 @@ def is_failed_answer(answer: str) -> bool:
                 return True
     
     # 检测答案是否太短且只有特殊标记和空白
+    # 注意：纯文本短答案（如模型拒绝回答）是有效的，只过滤含特殊标记的短答案
     if len(answer_stripped) < 100:
-        # 移除所有特殊标记后检查是否还有实质内容
-        content_without_tokens = answer_stripped
-        for token in special_tokens:
-            content_without_tokens = content_without_tokens.replace(token, "")
-        content_without_tokens = content_without_tokens.strip()
-        if len(content_without_tokens) < 20:  # 实质内容少于 20 个字符
-            return True
+        has_special = any(token in answer_stripped for token in special_tokens)
+        if has_special:
+            content_without_tokens = answer_stripped
+            for token in special_tokens:
+                content_without_tokens = content_without_tokens.replace(token, "")
+            content_without_tokens = content_without_tokens.strip()
+            if len(content_without_tokens) < 20:
+                return True
     
     # 检测 VSP 的失败模式
     failed_patterns = [
@@ -1210,7 +1212,7 @@ async def send_with_retry(provider: BaseProvider, prompt_struct: Dict[str, Any],
                 error_msg = f"[ERROR] 收到不完整答案: {answer[:50]}"
                 if i == retries - 1:
                     return error_msg
-                print(f"⚠️  收到不完整答案，重试中... ({i+1}/{retries})")
+                print(f"⚠️  收到不完整答案，重试中... ({i+1}/{retries}) 内容: {repr(answer[:80])}")
                 await asyncio.sleep(delay + random.random() * 0.2)
                 delay *= 2
                 continue
@@ -1599,6 +1601,7 @@ if __name__ == "__main__":
             "vsp_postproc_method": args.vsp_postproc_method,
             "vsp_postproc_fallback": args.vsp_postproc_fallback,
             "tunnel": tunnel_mode,
+            "max_tasks": args.max_tasks,
         }
         with open(os.path.join(temp_job_folder, "run_config.json"), "w", encoding="utf-8") as f:
             json.dump(run_config_to_save, f, indent=2, ensure_ascii=False)
