@@ -792,7 +792,6 @@ class ComtVspProvider(VSPProvider):
         # 查找指定的样本ID
         for task in self.comt_dataset:
             if task.get('id') == self.comt_sample_id:
-                print(f"  🎯 使用指定的CoMT样本: {self.comt_sample_id}")
                 return task
         
         # 未找到
@@ -1033,8 +1032,6 @@ class ComtVspProvider(VSPProvider):
         
         with open(os.path.join(task_dir, filename), "w", encoding='utf-8') as f:
             json.dump(task_data, f, indent=2, ensure_ascii=False)
-        
-        print(f"✅ 双任务构建完成: {len(all_images)} 张图片 (CoMT + MM-Safety)")
         
         return task_data
     

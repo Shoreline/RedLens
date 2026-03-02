@@ -614,23 +614,27 @@ async def consumer(
             completed = progress_state['completed']
             total = progress_state['total']
             total_elapsed = time.time() - progress_state['start_time']
-            avg_time = progress_state['total_task_time'] / completed if completed > 0 else 0
             percent = (completed / total * 100) if total > 0 else 0
             
-            # 计算预估剩余时间
+            # 基于实际墙钟时间估算剩余时间（自动反映并发效果）
+            avg_time = progress_state['total_task_time'] / completed if completed > 0 else 0
             if completed > 0:
-                eta = avg_time * (total - completed)
+                eta = total_elapsed / completed * (total - completed)
                 eta_str = format_time(eta)
             else:
                 eta_str = "计算中..."
             
+            # 任务标签：mode_category_index
+            task_label = f"{cfg.mode}_{item.category}_{item.index}"
+            
             # 打印进度
             status_icon = "❌" if is_error else "✅"
             print(f"{status_icon} [{completed}/{total}] {percent:.1f}% | "
-                  f"耗时: {format_time(total_elapsed)} | "
+                  f"当前耗时: {format_time(total_elapsed)} | "
                   f"平均: {avg_time:.2f}s/任务 | "
-                  f"本次: {task_duration:.2f}s | "
-                  f"预计剩余: {eta_str}")
+                  f"预计剩余: {eta_str} | "
+                  f"{task_label} | "
+                  f"本次: {task_duration:.2f}s")
             
             # 自动停止判定
             if is_error and progress_state['consecutive_error_count'] >= MAX_CONSECUTIVE_ERRORS:
