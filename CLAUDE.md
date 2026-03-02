@@ -137,6 +137,7 @@ AutoDL 远程日志路径（通过 `ssh seetacloud` 访问）：
 
 - docs/cli_reference.md — request.py 全部命令行参数
 - docs/output_structure.md — output 目录详细结构和字段说明
-- docs/vsp_postprocessor.md — VSP 后处理器指南
+- docs/vsp_postprocessor.md — VSP 后处理器指南（简要索引）
+- docs/vsp_post_processing.md — VSP 后处理器详细文档（参数、后端、数据流、调试）
 - docs/cf_tunnel.md — Cloudflare Tunnel 使用与原理
 - COMT_GUIDE.md — CoMT 模式完整指南
