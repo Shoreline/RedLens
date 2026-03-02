@@ -6,7 +6,7 @@
     python compare_hidden_states.py 177 178
     python compare_hidden_states.py 177 178 --sub_task q1 --turn t0
     python compare_hidden_states.py 177 178 --sub_task1 q1 --turn1 t0 --sub_task2 q2 --turn2 t0
-    python compare_hidden_states.py 177 178 --detailed
+    python compare_hidden_states.py 177 178 --no-detailed
 """
 
 import numpy as np
@@ -355,102 +355,120 @@ def print_summary_table(results: dict, detailed: bool = False, baseline_stats: d
     print()
 
 
-def plot_results(results: dict, output_path: Path, detailed: bool = False, baseline_sims: list = None):
-    """生成可视化图片。"""
+def plot_results(results: dict, output_path: Path, detailed: bool = True, baseline_sims: list = None):
+    """生成综合分析图（单张图包含 boxplot + 统计表格）。"""
     plt = _import_matplotlib()
+    from matplotlib.gridspec import GridSpec
 
     cats = sorted(results.keys())
 
-    # --- 图1：每个 category 的 cosine similarity 箱线图（每个 task 一个值） ---
-    fig, ax = plt.subplots(figsize=(max(8, len(cats) * 0.8), 5))
-
+    # 收集数据
     box_data = []
     labels = []
+    table_rows = []
+
     for cat in cats:
         r = results[cat]
-        if r["cos_sim"] and r["cos_sim"]["values"]:
-            valid = [s for s in r["cos_sim"]["values"] if not np.isnan(s)]
-            if valid:
-                box_data.append(valid)
-                labels.append(cat)
+        if not (r["cos_sim"] and r["cos_sim"]["values"]):
+            continue
+        valid = [s for s in r["cos_sim"]["values"] if not np.isnan(s)]
+        if not valid:
+            continue
+        box_data.append(valid)
+        labels.append(cat)
 
-    if box_data:
-        bp = ax.boxplot(box_data, tick_labels=labels, patch_artist=True)
-        for patch in bp["boxes"]:
-            patch.set_facecolor("#4ECDC4")
-            patch.set_alpha(0.7)
-        ax.set_xlabel("Category")
-        ax.set_ylabel("Cosine Similarity with Mean Direction")
-        ax.set_title("各 task 偏移方向与 Category 均值方向的一致性")
-        ax.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
+        cs = r["cos_sim"]
+        row = [cat, str(r["n_tasks"]),
+               f'{cs["mean"]:.3f} ± {cs["std"]:.3f}',
+               f'[{cs["min"]:.3f}, {cs["max"]:.3f}]']
 
-        # 添加 baseline 线
-        if baseline_sims:
-            valid_baseline = [s for s in baseline_sims if not np.isnan(s)]
-            if valid_baseline:
-                ax.axhline(y=np.mean(valid_baseline), color="red", linestyle="--",
-                           alpha=0.7, label=f"Cross-Category baseline ({np.mean(valid_baseline):.3f})")
-                ax.legend()
+        if "pairwise_cos" in r and r["pairwise_cos"]:
+            pc = r["pairwise_cos"]
+            row.append(f'{pc["mean"]:.3f} ± {pc["std"]:.3f}')
+        else:
+            row.append("—")
 
-        plt.tight_layout()
-        fig_path = output_path / "hs_diff_cosine_boxplot.png"
-        fig.savefig(fig_path, dpi=150)
-        print(f"箱线图已保存: {fig_path}")
+        if "pca_ratios" in r and r["pca_ratios"]:
+            pca = r["pca_ratios"]
+            row.append(" / ".join(f"{v:.1%}" for v in pca[:3]))
+        else:
+            row.append("—")
+
+        table_rows.append(row)
+
+    if not box_data:
+        return
+
+    # Baseline 行
+    if baseline_sims:
+        valid_bl = [s for s in baseline_sims if not np.isnan(s)]
+        if valid_bl:
+            bl_mean, bl_std = np.mean(valid_bl), np.std(valid_bl)
+            table_rows.append(["Cross-Cat", "", f"{bl_mean:.3f} ± {bl_std:.3f}", "", "", ""])
+
+    # 布局：上方 boxplot，下方表格
+    n_cats = len(labels)
+    n_table_rows = len(table_rows) + 1  # +1 表头
+    fig_w = max(10, n_cats * 1.8)
+    fig_h = 5.5 + n_table_rows * 0.4
+    fig = plt.figure(figsize=(fig_w, fig_h))
+    gs = GridSpec(2, 1, figure=fig, height_ratios=[3.5, max(1, n_table_rows * 0.45)], hspace=0.15)
+    ax = fig.add_subplot(gs[0])
+    ax_tbl = fig.add_subplot(gs[1])
+
+    # --- 箱线图 + 散点 ---
+    bp = ax.boxplot(box_data, tick_labels=labels, patch_artist=True, widths=0.5,
+                    showmeans=True,
+                    meanprops=dict(marker="D", markerfacecolor="#FF6B6B",
+                                   markeredgecolor="#FF6B6B", markersize=5))
+    for patch in bp["boxes"]:
+        patch.set_facecolor("#4ECDC4")
+        patch.set_alpha(0.7)
+
+    # 叠加散点显示每个 task
+    rng = np.random.default_rng(42)
+    for i, data in enumerate(box_data):
+        x = rng.normal(i + 1, 0.04, size=len(data))
+        ax.scatter(x, data, alpha=0.35, s=10, color="#2C3E50", zorder=3)
+
+    ax.set_ylabel("Cosine Similarity (d_i · mean_dir)")
+    ax.set_xlabel("Category")
+    ax.set_title("Hidden States 差异方向分析")
+
+    # Baseline 线
+    if baseline_sims:
+        valid_bl = [s for s in baseline_sims if not np.isnan(s)]
+        if valid_bl:
+            ax.axhline(y=np.mean(valid_bl), color="#FF6B6B", linestyle="--", alpha=0.7,
+                       label=f"Cross-Cat baseline ({np.mean(valid_bl):.3f})")
+            ax.legend(loc="lower left", fontsize=8)
+
+    # --- 表格 ---
+    ax_tbl.axis("off")
+    col_labels = ["Category", "Tasks", "Align Mean±Std", "Min / Max", "Pairwise Cos", "PCA (1 / 2 / 3)"]
+    tbl = ax_tbl.table(cellText=table_rows, colLabels=col_labels,
+                       loc="center", cellLoc="center",
+                       colWidths=[0.10, 0.07, 0.18, 0.16, 0.18, 0.22])
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.scale(1, 1.4)
+
+    # 表头样式
+    for j in range(len(col_labels)):
+        tbl[0, j].set_facecolor("#4ECDC4")
+        tbl[0, j].set_text_props(weight="bold")
+        tbl[0, j].set_alpha(0.4)
+
+    # Cross-Cat 行高亮
+    if baseline_sims and valid_bl:
+        last_row = len(table_rows)
+        for j in range(len(col_labels)):
+            tbl[last_row, j].set_facecolor("#FFE0E0")
+
+    fig_path = output_path / "hs_diff_summary.png"
+    fig.savefig(fig_path, dpi=150, bbox_inches="tight")
+    print(f"综合分析图已保存: {fig_path}")
     plt.close(fig)
-
-    # --- 图2：均值方向对齐度 bar chart（每个 category 的 mean） ---
-    fig, ax = plt.subplots(figsize=(max(8, len(cats) * 0.8), 5))
-    align_vals = []
-    align_labels = []
-    for cat in cats:
-        r = results[cat]
-        if r["cos_sim"]:
-            align_vals.append(r["cos_sim"]["mean"])
-            align_labels.append(cat)
-
-    if align_vals:
-        bars = ax.bar(align_labels, align_vals, color="#FF6B6B", alpha=0.7)
-        ax.set_xlabel("Category")
-        ax.set_ylabel("Mean Cosine Similarity")
-        ax.set_title("各 Category 偏移方向一致性（均值）")
-        ax.set_ylim(-1, 1)
-        ax.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
-        for bar, val in zip(bars, align_vals):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
-                    f"{val:.3f}", ha="center", va="bottom", fontsize=8)
-        plt.tight_layout()
-        fig_path = output_path / "hs_diff_alignment_bar.png"
-        fig.savefig(fig_path, dpi=150)
-        print(f"对齐度图已保存: {fig_path}")
-    plt.close(fig)
-
-    # --- 图3：同 category vs 跨 category 对比 (detailed) ---
-    if detailed and baseline_sims:
-        valid_baseline = [s for s in baseline_sims if not np.isnan(s)]
-        if valid_baseline:
-            fig, ax = plt.subplots(figsize=(8, 5))
-
-            # 收集所有同 category 的 per-task cosine similarities
-            intra_sims = []
-            for cat in cats:
-                r = results[cat]
-                if r["cos_sim"] and r["cos_sim"]["values"]:
-                    intra_sims.extend([s for s in r["cos_sim"]["values"] if not np.isnan(s)])
-
-            if intra_sims:
-                ax.hist(intra_sims, bins=30, alpha=0.6, label=f"同 Category (n={len(intra_sims)})",
-                        color="#4ECDC4", density=True)
-                ax.hist(valid_baseline, bins=30, alpha=0.6, label=f"跨 Category (n={len(valid_baseline)})",
-                        color="#FF6B6B", density=True)
-                ax.set_xlabel("Cosine Similarity")
-                ax.set_ylabel("Density")
-                ax.set_title("同 Category vs 跨 Category 差异方向分布")
-                ax.legend()
-                plt.tight_layout()
-                fig_path = output_path / "hs_diff_intra_vs_cross.png"
-                fig.savefig(fig_path, dpi=150)
-                print(f"对比分布图已保存: {fig_path}")
-            plt.close(fig)
 
 
 # ============================================================
@@ -466,7 +484,7 @@ def main():
   python compare_hidden_states.py 177 178
   python compare_hidden_states.py 177 178 --sub_task q1 --turn t0
   python compare_hidden_states.py 177 178 --sub_task1 q1 --turn1 t0 --sub_task2 q2 --turn2 t0
-  python compare_hidden_states.py 177 178 --detailed
+  python compare_hidden_states.py 177 178 --no-detailed
         """,
     )
     parser.add_argument("job1", type=int, help="第一个 job number")
@@ -479,7 +497,8 @@ def main():
     parser.add_argument("--sub_task2", default=None, help="Job2 的子任务标识（覆盖 --sub_task）")
     parser.add_argument("--turn1", default=None, help="Job1 的轮次标识（覆盖 --turn）")
     parser.add_argument("--turn2", default=None, help="Job2 的轮次标识（覆盖 --turn）")
-    parser.add_argument("--detailed", action="store_true", help="输出 PCA 分析 + 跨 category baseline")
+    parser.add_argument("--detailed", action=argparse.BooleanOptionalAction, default=True,
+                        help="PCA 分析 + 跨 category baseline（默认开启，--no-detailed 关闭）")
     args = parser.parse_args()
 
     # 合并共用 / 独立参数

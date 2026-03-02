@@ -20,6 +20,7 @@
     )
 """
 
+import hashlib
 import random
 from typing import List, Dict, Tuple, Any, Optional
 
@@ -206,8 +207,9 @@ def sample_by_category(
         original_count = len(cat_records)
         
         # 为每个类别生成唯一的种子（基于原始种子和类别名）
-        # 使用hash确保确定性
-        category_seed = seed + hash(category) % 1000000
+        # 使用 hashlib 确保跨进程确定性（Python 内置 hash() 每次启动随机化）
+        category_hash = int(hashlib.md5(category.encode()).hexdigest(), 16)
+        category_seed = seed + category_hash % 1000000
         
         # 生成该类别的采样掩码
         mask = generate_sample_mask(category_seed, original_count, sampling_rate)
