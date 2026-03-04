@@ -132,15 +132,24 @@ def ensure_cf_tunnels() -> Optional[Dict[str, str]]:
     """
     读取 Cloudflare Tunnel 配置并验证可达性。
     返回 {service_name: url} 映射，失败返回 None。
+
+    优先读取 .cf_tunnels.json（运行时配置）。如果不存在但 .cf_named_tunnel.json
+    存在（Named Tunnel），则直接从中推导 URL——无需手动 start。
     """
-    from tools.cf_tunnel import load_tunnel_config
+    from tools.cf_tunnel import load_tunnel_config, load_named_tunnel_config, _resolve_named_tunnel_urls
     import urllib.request
 
     tunnel_urls = load_tunnel_config()
     if not tunnel_urls:
-        print("❌ 未找到 Cloudflare Tunnel 配置")
-        print("   请先运行: python tools/cf_tunnel.py start")
-        return None
+        # Named Tunnel: URL 是固定子域名，可直接推导
+        named_config = load_named_tunnel_config()
+        if named_config:
+            tunnel_urls = _resolve_named_tunnel_urls(named_config)
+            print(f"☁️  Named Tunnel 配置已加载（{named_config['tunnel_name']}）")
+        else:
+            print("❌ 未找到 Cloudflare Tunnel 配置")
+            print("   请先运行: python tools/cf_tunnel.py start")
+            return None
 
     print(f"☁️  Cloudflare Tunnel 配置已加载 ({len(tunnel_urls)} 个服务)")
 

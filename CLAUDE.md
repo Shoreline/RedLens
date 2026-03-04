@@ -28,10 +28,12 @@ python request.py --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alib
 python request.py --mode vsp --consumers 3 --max_tasks 50
 
 # VSP mode with Cloudflare Tunnel (替代 SSH，跨国加速 ~400x)
-python tools/cf_tunnel.py start                          # 启动 tunnels（首次自动安装 cloudflared）
+python tools/cf_tunnel.py start                          # 自动检测 Named/Quick Tunnel
+python tools/cf_tunnel.py start --quick                  # 强制 Quick Tunnel
 python request.py --mode vsp --tunnel cf --max_tasks 50  # 使用 CF tunnel
 python tools/cf_tunnel.py status                         # 查看状态
 python tools/cf_tunnel.py stop                           # 停止
+python tools/cf_tunnel.py setup                          # Named Tunnel 配置指南
 
 # CoMT-VSP dual-task mode
 python request.py --mode comt_vsp --comt_sample_id "deletion-0107" --max_tasks 20
@@ -76,10 +78,10 @@ Execution mode is selected via `--mode` (`direct`/`vsp`/`comt_vsp`), and LLM pro
 VSP/CoMT-VSP 模式需要与 AutoDL 远程主机上的服务通信。`--tunnel` 参数控制传输方式：
 
 - **`ssh`**（默认）— SSH 端口转发，跨国场景受 GFW 限速（~3-5 KB/s）
-- **`cf`** — Cloudflare Quick Tunnel，通过 CDN 中继，跨国 ~2 MB/s
+- **`cf`** — Cloudflare Tunnel，通过 CDN 中继，跨国 ~2 MB/s。自动检测：存在 `.cf_named_tunnel.json` 则使用 Named Tunnel（稳定 URL、单进程），否则回退到 Quick Tunnel（随机 URL）
 - **`none`** — 不建立 tunnel（服务已可直接访问时使用）
 
-CF Tunnel 通过 `tools/cf_tunnel.py` 管理，在 AutoDL 上启动 `cloudflared` 进程暴露服务端口，分配 `*.trycloudflare.com` URL。配置保存在 `.cf_tunnels.json`，运行时通过环境变量传递给 VSP 子进程。详见 docs/cf_tunnel.md。
+CF Tunnel 通过 `tools/cf_tunnel.py` 管理，在 AutoDL 上启动 `cloudflared` 进程暴露服务端口。Named Tunnel 使用固定子域名（如 `llm.yuantian.me`），Quick Tunnel 分配随机 `*.trycloudflare.com` URL。运行时配置保存在 `.cf_tunnels.json`，通过环境变量传递给 VSP 子进程。详见 docs/cf_tunnel.md。
 
 ### Request Processing (`request.py`)
 

@@ -37,3 +37,7 @@ dist/
 build/
 *.egg-info/
 
+# Cloudflare Tunnel configs (user-specific, runtime)
+.cf_tunnels.json
+.cf_named_tunnel.json
+
