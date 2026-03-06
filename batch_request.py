@@ -132,7 +132,7 @@ def close_logging():
 # - 列表：需要遍历的参数变体
 args_combo = [
     # 固定参数
-    "--model 'qwen/qwen3-vl-8b-instruct'  --sampling_rate 0.12 --openrouter_provider alibaba --no-ssh-tunnel",
+    "--model 'qwen/qwen3-vl-235b-a22b-instruct'  --sampling_rate 0.12 --openrouter_provider alibaba --tunnel cf",
 
     # 需要遍历的参数变体：不同的 mode 组合
     [

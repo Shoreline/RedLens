@@ -128,32 +128,9 @@ def ensure_ssh_tunnels():
 
 # ============ Cloudflare Tunnel Management ============
 
-def ensure_cf_tunnels() -> Optional[Dict[str, str]]:
-    """
-    读取 Cloudflare Tunnel 配置并验证可达性。
-    返回 {service_name: url} 映射，失败返回 None。
-
-    优先读取 .cf_tunnels.json（运行时配置）。如果不存在但 .cf_named_tunnel.json
-    存在（Named Tunnel），则直接从中推导 URL——无需手动 start。
-    """
-    from tools.cf_tunnel import load_tunnel_config, load_named_tunnel_config, _resolve_named_tunnel_urls
+def _check_tunnel_urls(tunnel_urls: Dict[str, str]) -> int:
+    """验证 tunnel URL 可达性，返回可达数量。"""
     import urllib.request
-
-    tunnel_urls = load_tunnel_config()
-    if not tunnel_urls:
-        # Named Tunnel: URL 是固定子域名，可直接推导
-        named_config = load_named_tunnel_config()
-        if named_config:
-            tunnel_urls = _resolve_named_tunnel_urls(named_config)
-            print(f"☁️  Named Tunnel 配置已加载（{named_config['tunnel_name']}）")
-        else:
-            print("❌ 未找到 Cloudflare Tunnel 配置")
-            print("   请先运行: python tools/cf_tunnel.py start")
-            return None
-
-    print(f"☁️  Cloudflare Tunnel 配置已加载 ({len(tunnel_urls)} 个服务)")
-
-    # 验证至少一个 URL 可达
     reachable = 0
     for name, url in tunnel_urls.items():
         try:
@@ -161,7 +138,6 @@ def ensure_cf_tunnels() -> Optional[Dict[str, str]]:
             print(f"   ✅ {name}: {url}")
             reachable += 1
         except urllib.error.HTTPError as e:
-            # HTTP 错误但连接成功（如 404），tunnel 可达
             if e.code < 500:
                 print(f"   ✅ {name}: {url}")
                 reachable += 1
@@ -169,13 +145,47 @@ def ensure_cf_tunnels() -> Optional[Dict[str, str]]:
                 print(f"   ⚠️  {name}: {url} (HTTP {e.code})")
         except Exception as e:
             print(f"   ❌ {name}: {url} ({type(e).__name__})")
+    return reachable
 
-    if reachable == 0:
+
+def ensure_cf_tunnels() -> Optional[Dict[str, str]]:
+    """
+    读取 Cloudflare Tunnel 配置并验证可达性。
+    返回 {service_name: url} 映射，失败返回 None。
+
+    优先级：
+    1. Named Tunnel 配置（.cf_named_tunnel.json）→ URL 固定，始终优先
+    2. 运行时配置（.cf_tunnels.json）→ Quick Tunnel 的动态 URL
+    3. 都没有 → 报错
+    """
+    from tools.cf_tunnel import load_tunnel_config, load_named_tunnel_config, _resolve_named_tunnel_urls
+
+    # Named Tunnel 优先：URL 固定且可靠，不依赖 .cf_tunnels.json
+    named_config = load_named_tunnel_config()
+    if named_config:
+        tunnel_urls = _resolve_named_tunnel_urls(named_config)
+        print(f"☁️  Named Tunnel（{named_config['tunnel_name']}）{len(tunnel_urls)} 个服务")
+        reachable = _check_tunnel_urls(tunnel_urls)
+        if reachable > 0:
+            print(f"✅ Named Tunnel 就绪 ({reachable}/{len(tunnel_urls)} 可达)")
+            return tunnel_urls
+        print("⚠️  Named Tunnel URL 均不可达，检查 AutoDL 上 cloudflared 是否在运行")
+
+    # 回退：读取运行时配置（Quick Tunnel 或 cf_tunnel.py start 生成的）
+    tunnel_urls = load_tunnel_config()
+    if tunnel_urls:
+        print(f"☁️  Cloudflare Tunnel 配置已加载 ({len(tunnel_urls)} 个服务)")
+        reachable = _check_tunnel_urls(tunnel_urls)
+        if reachable > 0:
+            print(f"✅ Cloudflare Tunnels 就绪 ({reachable}/{len(tunnel_urls)} 可达)")
+            return tunnel_urls
         print("❌ 所有 tunnel 均不可达，请重新运行: python tools/cf_tunnel.py start")
         return None
 
-    print(f"✅ Cloudflare Tunnels 就绪 ({reachable}/{len(tunnel_urls)} 可达)")
-    return tunnel_urls
+    if not named_config:
+        print("❌ 未找到 Cloudflare Tunnel 配置")
+        print("   请先运行: python tools/cf_tunnel.py start")
+    return None
 
 # ============ Task Counter（单调递增的任务编号）============
 
@@ -226,15 +236,16 @@ def get_folder_label(mode: str, provider: str, llm_base_url: str = None) -> str:
 
     - mode=direct, provider=openrouter → "Openrouter"
     - mode=direct, provider=openai → "Openai"
-    - mode=direct, llm_base_url set → "Direct"
+    - mode=direct, provider=self → "Self"
+    - mode=direct, llm_base_url set → "Self"
     - mode=vsp → "Vsp"
     - mode=comt_vsp → "ComtVsp"
     """
     if mode in ("vsp", "comt_vsp"):
         return provider_to_camelcase(mode)
     # direct mode
-    if llm_base_url:
-        return "Direct"
+    if provider == "self" or llm_base_url:
+        return "Self"
     return provider_to_camelcase(provider)
 
 class ConsoleLogger:
@@ -1411,8 +1422,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", default="direct", choices=["direct", "vsp", "comt_vsp"],
                        help="执行模式: direct (直接调用LLM API), vsp (VSP子进程), comt_vsp (CoMT双任务+VSP)")
-    parser.add_argument("--provider", default="openrouter", choices=["openai", "openrouter"],
-                       help="LLM 提供商 (默认: openrouter)")
+    parser.add_argument("--provider", default="openrouter", choices=["openai", "openrouter", "self"],
+                       help="LLM 提供商: openrouter (默认), openai, self (自部署，需配合 --llm_base_url)")
     parser.add_argument("--model", default="gpt-5")
     parser.add_argument("--json_glob", 
                        default="~/code/MM-SafetyBench/data/processed_questions/*.json",
@@ -1505,6 +1516,16 @@ if __name__ == "__main__":
 
     # --no-ssh-tunnel 向后兼容
     tunnel_mode = "none" if args.no_ssh_tunnel else args.tunnel
+
+    # 向后兼容：有 --llm_base_url 但未显式指定 --provider self 时自动推断
+    if args.llm_base_url and args.provider != "self":
+        print(f"💡 检测到 --llm_base_url，自动设置 provider=self（建议显式使用 --provider self）")
+        args.provider = "self"
+
+    # 验证 provider=self 必须有 llm_base_url
+    if args.provider == "self" and not args.llm_base_url:
+        print("❌ 错误: --provider self 需要指定 --llm_base_url")
+        sys.exit(1)
 
     # 验证 image_types 必须在 MMSB_IMAGE_QUESTION_MAP 中
     invalid_types = [t for t in args.image_types if t not in MMSB_IMAGE_QUESTION_MAP]

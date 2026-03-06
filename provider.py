@@ -394,16 +394,21 @@ class VSPProvider(BaseProvider):
                 job_folder = os.path.abspath(job_folder)
             env["VSP_JOB_FOLDER"] = job_folder
         
-        # LLM provider config for VSP subprocess
-        # Priority: --llm_base_url > --provider defaults
-        if cfg and getattr(cfg, 'llm_base_url', None):
-            env["LLM_BASE_URL"] = cfg.llm_base_url
+        # LLM provider config for VSP subprocess — 按 provider 身份分支
+        provider = getattr(cfg, 'provider', None) if cfg else None
+        tunnel_urls = getattr(cfg, 'tunnel_urls', None) if cfg else None
+
+        if provider == "self" or (cfg and getattr(cfg, 'llm_base_url', None)):
+            # 自部署 LLM: 使用 llm_base_url，tunnel cf 时用 tunnel URL 替代
+            base_url = cfg.llm_base_url
+            if tunnel_urls and 'llm' in tunnel_urls:
+                base_url = tunnel_urls['llm'] + "/v1"
+            env["LLM_BASE_URL"] = base_url
             env["LLM_API_KEY"] = getattr(cfg, 'llm_api_key', None) or "not-needed"
-        elif cfg and getattr(cfg, 'provider', None) == "openrouter":
+        elif provider == "openrouter":
             env["LLM_BASE_URL"] = "https://openrouter.ai/api/v1"
             env["LLM_API_KEY"] = os.environ.get("OPENROUTER_API_KEY", "")
-        elif cfg and getattr(cfg, 'provider', None) == "openai":
-            # Don't set LLM_BASE_URL - use OpenAI default endpoint
+        elif provider == "openai":
             env["LLM_API_KEY"] = os.environ.get("OPENAI_API_KEY", "")
 
         # Pass openrouter_provider for VSP internal routing
@@ -413,13 +418,12 @@ class VSPProvider(BaseProvider):
         # 传递 prebaked processor 需要的上下文信息
         if meta:
             env["VSP_MMSB_CATEGORY"] = meta.get("category", "")
-        
+
         # 对于 ComtVspProvider，传递 comt_sample_id
         if hasattr(self, 'comt_sample_id') and self.comt_sample_id:
             env["VSP_COMT_SAMPLE_ID"] = self.comt_sample_id
 
-        # Cloudflare Tunnel: 传递 vision tool 端点 URL
-        tunnel_urls = getattr(cfg, 'tunnel_urls', None)
+        # Cloudflare Tunnel: 传递 vision tool 端点 URL（不含 llm，llm 已在上面按 provider 处理）
         if tunnel_urls:
             if 'grounding_dino' in tunnel_urls:
                 env["VSP_GROUNDING_DINO_ADDRESS"] = tunnel_urls['grounding_dino']
@@ -427,8 +431,6 @@ class VSPProvider(BaseProvider):
                 env["VSP_DEPTH_ANYTHING_ADDRESS"] = tunnel_urls['depth_anything']
             if 'som' in tunnel_urls:
                 env["VSP_SOM_ADDRESS"] = tunnel_urls['som']
-            if 'llm' in tunnel_urls:
-                env["LLM_BASE_URL"] = tunnel_urls['llm'] + "/v1"
 
         process = None
         try:
@@ -1117,9 +1119,17 @@ def get_provider(cfg: 'RunConfig') -> BaseProvider:
     mode = getattr(cfg, 'mode', 'direct')
 
     if mode == "direct":
+        if cfg.provider == "self":
+            # 自部署 LLM（OpenAI-compatible endpoint）
+            if not getattr(cfg, 'llm_base_url', None):
+                raise ValueError("provider='self' 需要指定 --llm_base_url")
+            return OpenRouterProvider(
+                api_key=getattr(cfg, 'llm_api_key', None) or "not-needed",
+                base_url=cfg.llm_base_url,
+                capture_hidden_states=True,
+            )
         if getattr(cfg, 'llm_base_url', None):
-            # Self-deployed LLM: use OpenAI-compatible ChatCompletion client
-            # 自部署端点可能返回 hidden_state，自动捕获并保存
+            # 向后兼容：有 llm_base_url 但 provider 不是 self 也走自部署
             return OpenRouterProvider(
                 api_key=getattr(cfg, 'llm_api_key', None) or "not-needed",
                 base_url=cfg.llm_base_url,
