@@ -53,6 +53,7 @@ import shutil
 import itertools
 import re
 import time
+import json
 import base64
 from io import BytesIO
 from datetime import datetime, timedelta
@@ -142,7 +143,7 @@ def close_logging():
 # - 列表：需要遍历的参数变体
 args_combo = [
     # 固定参数
-    "--tunnel cf --sampling_rate 0.01",
+    "--tunnel cf --sampling_rate 0.12",
     # 需要遍历的参数变体：不同的 mode 组合
     [
         '--profile qwen235b',
@@ -532,13 +533,294 @@ def move_job_to_batch(result: RunResult, batch_folder: str) -> RunResult:
     return result
 
 
+# ============ Batch State（断点续传）============
+
+def save_batch_state(batch_folder: str, batch_num: int, run_states: List[dict], created_at: str):
+    """保存 batch 运行状态到 batch_state.json（每个 job 完成后调用）"""
+    state = {
+        "batch_num": batch_num,
+        "batch_folder": batch_folder,
+        "created_at": created_at,
+        "total_runs": len(run_states),
+        "runs": run_states,
+    }
+    path = os.path.join(batch_folder, "batch_state.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
+
+
+def load_batch_state(batch_num: int):
+    """
+    定位 batch 文件夹并加载 batch_state.json。
+
+    Returns:
+        (batch_folder, state_dict)，找不到时 sys.exit(1)
+    """
+    import glob as _glob
+    matches = _glob.glob(f"output/batch_{batch_num}_*")
+    if not matches:
+        print(f"❌ 未找到 batch {batch_num} 的目录")
+        sys.exit(1)
+    batch_folder = sorted(matches)[-1]
+
+    state_path = os.path.join(batch_folder, "batch_state.json")
+    if not os.path.exists(state_path):
+        print(f"❌ 未找到 batch_state.json: {state_path}")
+        print(f"   该 batch 可能在新增断点续传功能之前运行，无法恢复")
+        sys.exit(1)
+
+    with open(state_path, "r", encoding="utf-8") as f:
+        state = json.load(f)
+
+    return batch_folder, state
+
+
+def rebuild_run_result(run_state: dict, batch_folder: str, total_runs: int) -> RunResult:
+    """
+    从已完成 job 的文件夹重建 RunResult（用于 resume 时重建 summary/report 所需数据）。
+    """
+    idx = run_state["index"]
+    job_basename = run_state.get("job_folder")
+    job_folder = os.path.join(batch_folder, job_basename) if job_basename else None
+    success = run_state["status"] == "completed"
+
+    # 尝试从 run_config.json 读取 mode/provider/model
+    mode = provider = model = None
+    task_num = None
+    total_tasks = None
+    summary_file = None
+    eval_file = None
+    output_file = None
+
+    if job_folder and os.path.isdir(job_folder):
+        config_path = os.path.join(job_folder, "run_config.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                mode = cfg.get("mode")
+                provider = cfg.get("provider")
+                model = cfg.get("model")
+            except Exception:
+                pass
+
+        # 从文件夹名提取 task_num
+        m = re.match(r'job_(\d+)_', job_basename)
+        if m:
+            task_num = int(m.group(1))
+
+        # 统计 results.jsonl 行数
+        jsonl_path = os.path.join(job_folder, "results.jsonl")
+        if os.path.exists(jsonl_path):
+            output_file = jsonl_path
+            with open(jsonl_path, "r") as f:
+                total_tasks = sum(1 for _ in f)
+
+        summary_path = os.path.join(job_folder, "summary.html")
+        if os.path.exists(summary_path):
+            summary_file = summary_path
+
+        eval_path = os.path.join(job_folder, "eval.csv")
+        if os.path.exists(eval_path):
+            eval_file = eval_path
+
+    # duration 从 run_state 恢复（如果有的话）
+    duration_secs = run_state.get("duration_secs", 0)
+
+    return RunResult(
+        run_index=idx,
+        args_str=run_state["args_str"],
+        success=success,
+        start_time=datetime.now(),  # 占位
+        end_time=datetime.now(),
+        duration=timedelta(seconds=duration_secs),
+        task_num=task_num,
+        total_tasks=total_tasks,
+        job_folder=job_folder,
+        output_file=output_file,
+        eval_file=eval_file,
+        summary_file=summary_file,
+        mode=mode,
+        provider=provider,
+        model=model,
+    )
+
+
+def collect_run_configs(results: List[RunResult], batch_folder: str) -> List[dict]:
+    """
+    从各 job 文件夹读取 run_config.json，汇总保存到 batch 文件夹。
+
+    Returns:
+        按 run_index 排列的 config 列表（读取失败的为空 dict）
+    """
+    configs = []
+    for r in results:
+        cfg = {}
+        if r.job_folder:
+            config_path = os.path.join(r.job_folder, "run_config.json")
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                except Exception:
+                    pass
+        # 用 run_config.json 中的实际值回填 RunResult 中缺失的字段
+        # （--profile 模式下 parse_args_str 无法从命令行提取这些值）
+        if cfg:
+            if not r.mode and cfg.get("mode"):
+                r.mode = cfg["mode"]
+            if not r.provider and cfg.get("provider"):
+                r.provider = cfg["provider"]
+            if not r.model and cfg.get("model"):
+                r.model = cfg["model"]
+            if not r.vsp_postproc and cfg.get("vsp_postproc"):
+                r.vsp_postproc = cfg["vsp_postproc"]
+            if not r.vsp_postproc_backend and cfg.get("vsp_postproc_backend"):
+                r.vsp_postproc_backend = cfg["vsp_postproc_backend"]
+            if not r.vsp_postproc_method and cfg.get("vsp_postproc_method"):
+                r.vsp_postproc_method = cfg["vsp_postproc_method"]
+            if not r.vsp_postproc_fallback and cfg.get("vsp_postproc_fallback"):
+                r.vsp_postproc_fallback = cfg["vsp_postproc_fallback"]
+            if not r.comt_sample_id and cfg.get("comt_sample_id"):
+                r.comt_sample_id = cfg["comt_sample_id"]
+
+        # 附加运行时信息（run_config.json 里没有的）
+        cfg["_job_folder"] = os.path.basename(r.job_folder) if r.job_folder else None
+        cfg["_job_num"] = r.task_num
+        cfg["_status"] = "success" if r.success else "failed"
+        configs.append(cfg)
+
+    # 保存汇总文件
+    summary_path = os.path.join(batch_folder, "run_configs.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(configs, f, indent=2, ensure_ascii=False)
+    print(f"✅ 运行配置已汇总: {summary_path}")
+
+    return configs
+
+
+def _build_config_comparison_html(configs: List[dict], results: List[RunResult]) -> str:
+    """
+    生成配置对比 HTML 片段。
+    行 = 参数名，列 = Job。仅显示有差异的参数行，相同值的参数折叠。
+    不同值用颜色区分。
+    """
+    if not configs:
+        return ""
+
+    # 收集所有键（排除内部 _ 开头的元字段）
+    all_keys = []
+    seen = set()
+    for cfg in configs:
+        for k in cfg:
+            if not k.startswith("_") and k not in seen:
+                all_keys.append(k)
+                seen.add(k)
+
+    # 将值标准化为字符串
+    def fmt_val(v):
+        if v is None:
+            return "-"
+        if isinstance(v, bool):
+            return "yes" if v else "no"
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v)
+        return str(v)
+
+    # 分类：有差异 vs 全相同
+    diff_keys = []
+    same_keys = []
+    # 始终优先显示的关键参数
+    priority_keys = ["profile", "mode", "provider", "model"]
+    for k in all_keys:
+        vals = [fmt_val(cfg.get(k)) for cfg in configs]
+        if len(set(vals)) > 1:
+            diff_keys.append(k)
+        else:
+            same_keys.append(k)
+
+    # 确保 priority_keys 排在 diff_keys 前面
+    ordered_diff = [k for k in priority_keys if k in diff_keys]
+    ordered_diff += [k for k in diff_keys if k not in priority_keys]
+    diff_keys = ordered_diff
+
+    # 颜色调色板（给不同值分配不同颜色）
+    palette = [
+        "#00d9ff", "#ffd93d", "#ff6b9d", "#00ff88",
+        "#da70d6", "#ff8c42", "#87ceeb", "#98fb98",
+    ]
+
+    def get_color_map(values):
+        """为一组值分配颜色"""
+        unique = list(dict.fromkeys(values))  # 保序去重
+        return {v: palette[i % len(palette)] for i, v in enumerate(unique)}
+
+    # Job 标签
+    job_labels = []
+    for r in results:
+        label = f"Job #{r.task_num}" if r.task_num else f"Run {r.run_index}"
+        job_labels.append(label)
+
+    # 构建差异表行
+    diff_rows = ""
+    for k in diff_keys:
+        vals = [fmt_val(cfg.get(k)) for cfg in configs]
+        cmap = get_color_map(vals)
+        cells = ""
+        for v in vals:
+            color = cmap[v]
+            bg = f"rgba({int(color[1:3],16)},{int(color[3:5],16)},{int(color[5:7],16)},0.15)"
+            cells += f'<td style="color:{color};background:{bg};font-weight:600">{v}</td>'
+        diff_rows += f"<tr><td class='param-name'>{k}</td>{cells}</tr>\n"
+
+    # 构建相同参数行
+    same_rows = ""
+    for k in same_keys:
+        v = fmt_val(configs[0].get(k))
+        same_rows += f"<tr><td class='param-name'>{k}</td><td colspan='{len(configs)}'>{v}</td></tr>\n"
+
+    # 列头
+    header_cells = "".join(f"<th>{lbl}</th>" for lbl in job_labels)
+
+    html = f'''
+        <div class="section">
+            <h2>Run Configs Comparison</h2>
+            <p style="color:#888;margin-bottom:15px;font-size:0.9em">仅显示各 Job 之间有差异的参数，相同参数折叠在下方</p>
+            <table class="config-table">
+                <thead>
+                    <tr><th class="param-name">Parameter</th>{header_cells}</tr>
+                </thead>
+                <tbody>
+                    {diff_rows}
+                </tbody>
+            </table>'''
+
+    if same_rows:
+        html += f'''
+            <details style="margin-top:15px">
+                <summary style="color:#888;cursor:pointer;font-size:0.9em">相同参数（点击展开）</summary>
+                <table class="config-table" style="margin-top:10px">
+                    <thead>
+                        <tr><th class="param-name">Parameter</th><th colspan="{len(configs)}">Value (all jobs)</th></tr>
+                    </thead>
+                    <tbody>
+                        {same_rows}
+                    </tbody>
+                </table>
+            </details>'''
+
+    html += "\n        </div>"
+    return html
+
+
 def generate_batch_summary_html(
     batch_folder: str,
     batch_num: int,
     results: List[RunResult],
     batch_start: datetime,
     batch_end: datetime,
-    stop_reason: Optional[str] = None
+    stop_reason: Optional[str] = None,
+    configs: Optional[List[dict]] = None
 ) -> str:
     """
     生成 batch_summary.html
@@ -639,6 +921,12 @@ def generate_batch_summary_html(
         .time-info p {{ margin-bottom: 8px; }}
         .time-info strong {{ color: #00d9ff; }}
         .stop-reason {{ background: rgba(255, 193, 7, 0.2); color: #ffc107; padding: 10px 15px; border-radius: 8px; margin-top: 15px; }}
+        .config-table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+        .config-table th, .config-table td {{ padding: 8px 14px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08); font-size: 0.9em; }}
+        .config-table th {{ background: rgba(0,0,0,0.3); color: #00d9ff; font-weight: 600; white-space: nowrap; }}
+        .config-table .param-name {{ color: #bbb; font-family: 'SF Mono', Menlo, monospace; font-size: 0.85em; white-space: nowrap; background: rgba(0,0,0,0.2); }}
+        .config-table tr:hover {{ background: rgba(255,255,255,0.03); }}
+        details summary:hover {{ color: #00d9ff; }}
     </style>
 </head>
 <body>
@@ -665,7 +953,9 @@ def generate_batch_summary_html(
             </div>
             {f'<div class="stop-reason">⚠️ Stop Reason: {stop_reason}</div>' if stop_reason else ''}
         </div>
-        
+
+        {_build_config_comparison_html(configs or [], results)}
+
         <div class="section">
             <h2>Job Details</h2>
             <table>
@@ -974,74 +1264,146 @@ def main():
     """主函数"""
     batch_start = datetime.now()
     timestamp_str = batch_start.strftime('%m%d_%H%M%S')
-    
-    # 生成所有参数组合
+
+    # ============ CLI 参数解析 ============
+    # --resume {batch_num}: 断点续传
+    resume_batch = None
+    dry_run = "--dry-run" in sys.argv or "--dry_run" in sys.argv
+    for i, arg in enumerate(sys.argv):
+        if arg == "--resume" and i + 1 < len(sys.argv):
+            resume_batch = int(sys.argv[i + 1])
+
+    # 生成所有参数组合（正常模式才需要）
     combinations = generate_combinations(args_combo)
-    total_runs = len(combinations)
 
     # --show-config: 显示所有组合的解析配置并退出
     if "--show-config" in sys.argv or "--show_config" in sys.argv:
         show_batch_config(combinations)
         sys.exit(0)
 
-    # 确保 output 目录存在
-    os.makedirs("output", exist_ok=True)
-    
-    # 获取批次编号（独立计数，从1开始）
-    batch_num = get_next_batch_num()
-    
-    # 创建 batch 文件夹
-    batch_folder = f"output/batch_{batch_num}_{timestamp_str}"
-    os.makedirs(batch_folder, exist_ok=True)
-    
-    # 创建日志文件（直接放在 batch 文件夹）
+    # ============ Resume 模式 vs 正常模式 ============
+    if resume_batch:
+        batch_folder, saved_state = load_batch_state(resume_batch)
+        batch_num = saved_state["batch_num"]
+        created_at = saved_state["created_at"]
+        run_states = saved_state["runs"]
+        combinations = [rs["args_str"] for rs in run_states]
+        total_runs = len(combinations)
+
+        # 统计状态
+        completed = [rs for rs in run_states if rs["status"] == "completed"]
+        pending = [rs for rs in run_states if rs["status"] != "completed"]
+
+        print(f"\n{'='*80}")
+        print(f"🔄 恢复 Batch #{batch_num}")
+        print(f"{'='*80}")
+        print(f"Batch 文件夹: {batch_folder}")
+        print(f"总运行次数: {total_runs}")
+        print(f"已完成: {len(completed)}")
+        print(f"待运行: {len(pending)}")
+        print(f"{'='*80}\n")
+
+        if not pending:
+            print("✅ 所有运行已完成，无需恢复！")
+            sys.exit(0)
+
+        # 显示状态
+        for rs in run_states:
+            status_icon = "✅" if rs["status"] == "completed" else ("❌" if rs["status"] == "failed" else "⏳")
+            print(f"   [{rs['index']}/{total_runs}] {status_icon} {rs['status']:<10} {rs['args_str']}")
+        print()
+
+        if dry_run:
+            print("🔍 Dry-run 模式，不执行任何操作")
+            sys.exit(0)
+
+        # 重建已完成 job 的 RunResult
+        results: List[RunResult] = []
+        for rs in run_states:
+            if rs["status"] == "completed":
+                results.append(rebuild_run_result(rs, batch_folder, total_runs))
+    else:
+        # ---- 正常模式 ----
+        total_runs = len(combinations)
+        os.makedirs("output", exist_ok=True)
+        batch_num = get_next_batch_num()
+        batch_folder = f"output/batch_{batch_num}_{timestamp_str}"
+        os.makedirs(batch_folder, exist_ok=True)
+        created_at = batch_start.strftime('%Y-%m-%d %H:%M:%S')
+
+        # 初始化 run_states
+        run_states = [
+            {"index": i + 1, "args_str": combo, "status": "pending", "job_folder": None}
+            for i, combo in enumerate(combinations)
+        ]
+        results: List[RunResult] = []
+
+    # ============ 日志 & 运行循环 ============
     log_path = os.path.join(batch_folder, "batch.log")
     log_file = setup_logging(log_path)
-    
+
     try:
-        print(f"\n{'='*80}")
-        print(f"🔧 批量运行 request.py")
-        print(f"{'='*80}")
-        print(f"批次编号: {batch_num}")
-        print(f"开始时间: {batch_start.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"总运行次数: {total_runs}")
-        print(f"Batch 文件夹: {batch_folder}")
-        print(f"{'='*80}\n")
-        
-        # 显示所有组合
-        print("📋 将运行以下组合:")
-        for i, combo in enumerate(combinations, 1):
-            print(f"   [{i}] {combo}")
-        print()
-        
-        # 运行每个组合
-        results: List[RunResult] = []
+        if not resume_batch:
+            print(f"\n{'='*80}")
+            print(f"🔧 批量运行 request.py")
+            print(f"{'='*80}")
+            print(f"批次编号: {batch_num}")
+            print(f"开始时间: {batch_start.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"总运行次数: {total_runs}")
+            print(f"Batch 文件夹: {batch_folder}")
+            print(f"{'='*80}\n")
+
+            print("📋 将运行以下组合:")
+            for i, combo in enumerate(combinations, 1):
+                print(f"   [{i}] {combo}")
+            print()
+
+        # 保存初始状态
+        save_batch_state(batch_folder, batch_num, run_states, created_at)
+
         stop_reason: Optional[str] = None
-        
+
         for i, args_str in enumerate(combinations, 1):
+            rs = run_states[i - 1]
+
+            # 跳过已完成的
+            if rs["status"] == "completed":
+                print(f"\n⏭️  跳过已完成的运行 [{i}/{total_runs}]: {args_str}\n")
+                continue
+
+            # 标记为 running 并保存
+            rs["status"] = "running"
+            save_batch_state(batch_folder, batch_num, run_states, created_at)
+
             result = run_request(args_str, i, total_runs)
-            
-            # 将 job 文件夹移动到 batch 文件夹
             result = move_job_to_batch(result, batch_folder)
-            
             results.append(result)
-        
+
+            # 更新状态
+            rs["status"] = "completed" if result.success else "failed"
+            rs["job_folder"] = os.path.basename(result.job_folder) if result.job_folder else None
+            rs["duration_secs"] = result.duration.total_seconds()
+            save_batch_state(batch_folder, batch_num, run_states, created_at)
+
         # 记录结束时间
         batch_end = datetime.now()
-        
+
         # 打印详细汇总
         print_results_summary(results, batch_start, batch_end, stop_reason)
-        
-        # 生成 batch_summary.html
-        generate_batch_summary_html(batch_folder, batch_num, results, batch_start, batch_end, stop_reason)
-        
+
+        # 收集各 job 的运行配置
+        configs = collect_run_configs(results, batch_folder)
+
+        # 生成 batch_summary.html（含配置对比表）
+        generate_batch_summary_html(batch_folder, batch_num, results, batch_start, batch_end, stop_reason, configs)
+
         # 生成批量结果报告（带图表的 evaluation_report.html）
         if GENERATE_REPORT:
             generate_batch_report(results, batch_folder, batch_num)
-        
+
         # 关闭日志文件
         close_logging()
-        
+
         # 打印最终信息
         print(f"\n{'='*80}")
         print(f"🎉 批量运行完成！")
@@ -1050,14 +1412,13 @@ def main():
         print(f"📊 Summary: {os.path.join(batch_folder, 'batch_summary.html')}")
         print(f"📝 日志: {log_path}")
         print(f"{'='*80}\n")
-        
+
         # 返回退出码
         fail_count = sum(1 for r in results if not r.success)
-        # 若内部自动停止则使用特殊退出码 2，便于上层监控
         if stop_reason:
             sys.exit(2)
         sys.exit(0 if fail_count == 0 else 1)
-        
+
     except Exception as e:
         # 确保异常时也关闭日志
         close_logging()

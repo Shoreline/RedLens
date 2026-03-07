@@ -54,6 +54,8 @@ python mmsb_eval.py --jsonl_file output/job_*/results.jsonl
 
 # Batch runs / Report
 python batch_request.py
+python batch_request.py --resume 15             # 断点续传：恢复 batch 15
+python batch_request.py --resume 15 --dry-run   # 只看状态，不执行
 python generate_report_with_charts.py
 
 # Tests

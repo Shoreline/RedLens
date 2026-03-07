@@ -118,7 +118,9 @@ for f in hs_dir.glob("*_turns.json"):
 ```
 batch_7_0208_104209/
 ├── batch.log                   # 批次运行完整日志
-├── batch_summary.html          # 批次汇总报告
+├── batch_summary.html          # 批次汇总报告（含配置对比表）
+├── batch_state.json            # 运行状态（用于断点续传 --resume）
+├── run_configs.json            # 各 job 运行配置汇总（便于对比差异）
 ├── job_164_tasks_202_.../      # 各个子任务的 job 目录
 ├── job_165_tasks_202_.../
 ├── ...
@@ -130,6 +132,18 @@ batch_7_0208_104209/
     ├── chart_global_*.png      # 全局对比图表
     └── ...
 ```
+
+### run_configs.json
+
+汇总各 job 的 `run_config.json`，以数组形式存放（按运行顺序排列）。每个元素包含该 job 的完整运行参数（profile、mode、provider、model、sampling_rate 等），以及附加的元信息字段：
+
+- `_job_folder` — job 文件夹名
+- `_job_num` — job 编号
+- `_status` — 运行状态（`"success"` / `"failed"`）
+
+`batch_summary.html` 中的 **Run Configs Comparison** 区域自动对比所有 job 的配置：
+- 仅展示有差异的参数行（颜色区分不同值）
+- 相同参数折叠在可展开的 `<details>` 中
 
 ## 全局文件
 
