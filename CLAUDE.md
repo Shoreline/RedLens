@@ -15,11 +15,17 @@ python3 -m venv venv && source venv/bin/activate && pip install -r requirements.
 # Quick test (default: --mode direct --provider openrouter)
 python request.py --max_tasks 10
 
+# 使用 Profile（推荐，替代长命令行）
+python request.py --profile comt_vsp --max_tasks 20       # 预定义参数组合
+python request.py --profile autodl_qwen --max_tasks 10    # 自部署 Qwen
+python request.py --profile comt_vsp --model X --max_tasks 5  # CLI 覆盖 profile 值
+python request.py --list-profiles                          # 查看所有可用 profile
+
 # Direct mode with OpenAI
 python request.py --provider openai --model "gpt-5" --max_tasks 50
 
-# Direct mode with custom LLM endpoint
-python request.py --llm_base_url "http://autodl:8000/v1" --model "Qwen3-VL-8B" --max_tasks 50
+# Direct mode with self-hosted LLM
+python request.py --provider self --llm_base_url "https://llm.yuantian.me/v1" --model "Qwen3-VL-8B" --max_tasks 50
 
 # OpenRouter with pinned upstream provider
 python request.py --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alibaba --max_tasks 50
@@ -71,7 +77,7 @@ python -m pytest tests/
 - **VSPProvider** — spawns VisualSketchpad as subprocess, extracts answers from debug logs
 - **ComtVspProvider** — sequential dual-task VSP (CoMT object detection first, then safety evaluation as follow-up in the same conversation)
 
-Execution mode is selected via `--mode` (`direct`/`vsp`/`comt_vsp`), and LLM provider via `--provider` (`openai`/`openrouter`, default `openrouter`). Factory function `get_provider()` dispatches based on mode first, then provider. OpenRouterProvider supports `--openrouter_provider` to pin a specific upstream provider (e.g. `together`, `alibaba`). All modes support `--llm_base_url` to override the default LLM endpoint (highest priority). When using a custom endpoint (`--llm_base_url`) that returns `hidden_state` in the API response, all modes (including direct) automatically capture and save hidden states as `.npy` files in `{job_folder}/hidden_states/`. Direct mode captures from the API response's extra fields; VSP/CoMT-VSP modes capture from the subprocess's `hidden_states.json`.
+Execution mode is selected via `--mode` (`direct`/`vsp`/`comt_vsp`), and LLM provider via `--provider` (`openai`/`openrouter`/`self`). `provider=self` 用于自部署 LLM（需配合 `--llm_base_url`）。Factory function `get_provider()` dispatches based on mode first, then provider. OpenRouterProvider supports `--openrouter_provider` to pin a specific upstream provider (e.g. `together`, `alibaba`). When using a custom endpoint (`--llm_base_url`) that returns `hidden_state` in the API response, all modes (including direct) automatically capture and save hidden states as `.npy` files in `{job_folder}/hidden_states/`.
 
 ### Tunnel 传输 (`--tunnel`)
 
@@ -103,7 +109,9 @@ All output goes to `output/`. Detailed structure documented in docs/output_struc
 | File | Purpose |
 |------|---------|
 | `request.py` | Main entry point — inference + evaluation pipeline |
-| `provider.py` | LLM provider abstraction (OpenAI, OpenRouter, Qwen, VSP, CoMT-VSP) |
+| `provider.py` | LLM provider abstraction (OpenAI, OpenRouter, Self, VSP, CoMT-VSP) |
+| `profile_loader.py` | Profile 配置加载（继承、验证、CLI 覆盖） |
+| `profiles.yaml` | 预定义参数 profile（defaults + 8 个预设） |
 | `mmsb_eval.py` | Safety evaluation engine (GPT as judge) |
 | `job_fix.py` | Resume failed tasks in a job (checkpoint-restart) |
 | `batch_request.py` | Runs parameter combinations, generates batch reports |
@@ -137,6 +145,7 @@ AutoDL 远程日志路径（通过 `ssh seetacloud` 访问）：
 
 ## Detailed Documentation
 
+- docs/profiles.md — Profile 配置系统使用指南
 - docs/cli_reference.md — request.py 全部命令行参数
 - docs/output_structure.md — output 目录详细结构和字段说明
 - docs/vsp_postprocessor.md — VSP 后处理器指南（简要索引）

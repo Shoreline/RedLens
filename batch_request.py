@@ -30,10 +30,20 @@
             '--provider openrouter --model "qwen/qwen3-vl-235b-a22b-instruct"',
         ],
     ]
-    
+
     这会运行 2 次 request.py：
     1. --categories 12-Health_Consultation --provider comt_vsp --model "qwen/qwen3-vl-235b-a22b-instruct"
     2. --categories 12-Health_Consultation --provider openrouter --model "qwen/qwen3-vl-235b-a22b-instruct"
+
+    也支持 --profile 简化参数：
+    args_combo = [
+        "--sampling_rate 0.12",
+        [
+            '--profile direct --model "qwen/qwen3-vl-235b-a22b-instruct"',
+            '--profile comt_vsp_prebaked_ask',
+            '--profile comt_vsp_prebaked_sd_good',
+        ],
+    ]
 """
 
 import subprocess
@@ -132,14 +142,13 @@ def close_logging():
 # - 列表：需要遍历的参数变体
 args_combo = [
     # 固定参数
-    "--model 'qwen/qwen3-vl-235b-a22b-instruct'  --sampling_rate 0.12 --openrouter_provider alibaba --tunnel cf",
-
+    "--tunnel cf --sampling_rate 0.01",
     # 需要遍历的参数变体：不同的 mode 组合
     [
-        '--mode direct',
-        '--mode comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback ask --vsp_postproc_method visual_mask',
-        '--mode comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method good --vsp_postproc_sd_prompt "remove the boxed objects"',
-        '--mode comt_vsp --comt_sample_id deletion-0107 --vsp_postproc --vsp_postproc_backend prebaked --vsp_postproc_fallback sd --vsp_postproc_method bad --vsp_postproc_sd_prompt "remove the boxed objects"',
+        '--profile qwen235b',
+        '--profile comt_vsp_prebaked_ask',
+        '--profile comt_vsp_prebaked_sd_good',
+        '--profile comt_vsp_prebaked_sd_bad',
     ],
 ]
 
@@ -862,6 +871,105 @@ def generate_batch_report(results: List[RunResult], batch_folder: str, batch_num
         print(f"\n❌ 生成报告时发生错误: {e}")
 
 
+def show_batch_config(combinations):
+    """
+    调用 request.py --show-config 获取每个组合的解析配置，以表格形式对比展示。
+    只显示组合之间有差异的参数列，以及 profile 列。
+    """
+    import json as _json
+    import shutil as _shutil
+
+    configs = []
+    for combo in combinations:
+        cmd = f"python request.py {combo} --show-config"
+        try:
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=10
+            )
+            # 从输出中提取 JSON（最后一个 { ... } 块）
+            stdout = result.stdout
+            # 找到 JSON 起始位置
+            json_start = stdout.rfind("{\n")
+            if json_start >= 0:
+                cfg = _json.loads(stdout[json_start:])
+                configs.append(cfg)
+            else:
+                configs.append({"_error": f"无法解析输出"})
+        except Exception as e:
+            configs.append({"_error": str(e)})
+
+    if not configs:
+        print("❌ 没有配置可显示")
+        return
+
+    # 收集所有键
+    all_keys = []
+    seen = set()
+    for cfg in configs:
+        for k in cfg:
+            if k not in seen:
+                all_keys.append(k)
+                seen.add(k)
+
+    # 找出有差异的键 + 始终显示的键
+    always_show = {"profile", "mode", "provider", "model"}
+    diff_keys = []
+    for k in all_keys:
+        if k.startswith("_"):
+            continue
+        vals = [str(cfg.get(k, "")) for cfg in configs]
+        if k in always_show or len(set(vals)) > 1:
+            diff_keys.append(k)
+
+    if not diff_keys:
+        diff_keys = all_keys  # fallback: 全部显示
+
+    # 计算列宽
+    term_width = _shutil.get_terminal_size((120, 40)).columns
+    col_data = {}  # key -> [header, val1, val2, ...]
+    for k in diff_keys:
+        vals = []
+        for cfg in configs:
+            v = cfg.get(k)
+            if v is None:
+                vals.append("-")
+            elif isinstance(v, bool):
+                vals.append("yes" if v else "no")
+            elif isinstance(v, list):
+                vals.append(",".join(str(x) for x in v))
+            else:
+                vals.append(str(v))
+        col_data[k] = vals
+
+    # 计算每列宽度（header 和值的最大长度）
+    col_widths = {}
+    for k in diff_keys:
+        w = len(k)
+        for v in col_data[k]:
+            w = max(w, len(v))
+        col_widths[k] = w
+
+    # 行号列
+    idx_width = max(3, len(str(len(configs))))
+
+    # 打印表头
+    header = f"{'#':>{idx_width}}"
+    for k in diff_keys:
+        header += f"  {k:<{col_widths[k]}}"
+    print(f"\n📊 Batch 配置对比（{len(configs)} 个组合，仅显示差异列）:\n")
+    print(header)
+    print("-" * len(header))
+
+    # 打印每行
+    for i, cfg in enumerate(configs):
+        row = f"{i+1:>{idx_width}}"
+        for k in diff_keys:
+            row += f"  {col_data[k][i]:<{col_widths[k]}}"
+        print(row)
+
+    print()
+
+
 def main():
     """主函数"""
     batch_start = datetime.now()
@@ -870,7 +978,12 @@ def main():
     # 生成所有参数组合
     combinations = generate_combinations(args_combo)
     total_runs = len(combinations)
-    
+
+    # --show-config: 显示所有组合的解析配置并退出
+    if "--show-config" in sys.argv or "--show_config" in sys.argv:
+        show_batch_config(combinations)
+        sys.exit(0)
+
     # 确保 output 目录存在
     os.makedirs("output", exist_ok=True)
     

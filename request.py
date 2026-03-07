@@ -1512,7 +1512,64 @@ if __name__ == "__main__":
     parser.add_argument("--no-ssh-tunnel", action="store_true",
                        help="[已废弃] 等价于 --tunnel none")
 
-    args = parser.parse_args()
+    # Profile 系统
+    parser.add_argument("--profile", default=None,
+                       help="使用预定义的参数 profile（如 'comt_vsp', 'autodl_qwen'）。CLI 参数覆盖 profile 值")
+    parser.add_argument("--profile-file", "--profile_file", default="profiles.yaml",
+                       help="Profile 配置文件路径（默认: profiles.yaml）")
+    parser.add_argument("--list-profiles", "--list_profiles", action="store_true",
+                       help="列出所有可用的 profile 并退出")
+    parser.add_argument("--show-config", "--show_config", action="store_true",
+                       help="显示解析后的完整运行配置并退出（不实际运行）")
+
+    # ============ Profile 系统 ============
+    # 先检测 CLI 显式指定的参数（在 profile 应用之前）
+    from profile_loader import (
+        load_profiles, resolve_profile, apply_profile,
+        get_cli_explicit_args, validate_profile, list_profiles,
+    )
+
+    # 两次 parse：第一次检测显式参数，第二次正式解析
+    explicit_args, args = get_cli_explicit_args(parser)
+
+    # --list-profiles: 列出所有 profile 并退出
+    if args.list_profiles:
+        try:
+            profiles = load_profiles(args.profile_file)
+            print("📋 可用的 Profile:\n")
+            for name, desc in list_profiles(profiles):
+                print(f"  {name:30s} {desc}")
+            print(f"\n使用方式: python request.py --profile <名称> [--其他覆盖参数]")
+        except FileNotFoundError:
+            print(f"❌ Profile 文件不存在: {args.profile_file}")
+        sys.exit(0)
+
+    # 应用 profile（如果指定了 --profile）
+    if args.profile:
+        try:
+            profiles = load_profiles(args.profile_file)
+            resolved = resolve_profile(args.profile, profiles)
+
+            # 验证 profile
+            errors, warnings = validate_profile(resolved)
+            for w in warnings:
+                print(f"⚠️  Profile 警告: {w}")
+            if errors:
+                for e in errors:
+                    print(f"❌ Profile 错误: {e}")
+                sys.exit(1)
+
+            # 应用 profile 值（CLI 显式参数优先）
+            args, applied, skipped = apply_profile(args, resolved, explicit_args)
+
+            print(f"📦 Profile: {args.profile}")
+            if applied:
+                print(f"   应用: {', '.join(applied)}")
+            if skipped:
+                print(f"   CLI 覆盖: {', '.join(skipped)}")
+        except (FileNotFoundError, KeyError, ValueError) as e:
+            print(f"❌ Profile 加载失败: {e}")
+            sys.exit(1)
 
     # --no-ssh-tunnel 向后兼容
     tunnel_mode = "none" if args.no_ssh_tunnel else args.tunnel
@@ -1534,6 +1591,38 @@ if __name__ == "__main__":
         print(f"   有效的选项: {', '.join(MMSB_IMAGE_QUESTION_MAP.keys())}")
         sys.exit(1)
     
+    # --show-config: 显示解析后的完整配置并退出
+    if args.show_config:
+        config_display = {
+            "profile": args.profile,
+            "mode": args.mode,
+            "provider": args.provider,
+            "model": args.model,
+            "temperature": args.temp,
+            "top_p": args.top_p,
+            "max_tokens": args.max_tokens,
+            "seed": args.seed,
+            "consumers": args.consumers,
+            "tunnel": tunnel_mode,
+            "sampling_rate": args.sampling_rate,
+            "sampling_seed": args.sampling_seed,
+            "image_types": args.image_types,
+            "categories": args.categories,
+            "max_tasks": args.max_tasks,
+            "llm_base_url": args.llm_base_url,
+            "openrouter_provider": args.openrouter_provider,
+            "comt_sample_id": args.comt_sample_id,
+            "eval_model": args.eval_model,
+            "eval_concurrency": args.eval_concurrency,
+            "vsp_postproc": args.vsp_postproc,
+            "vsp_postproc_backend": args.vsp_postproc_backend,
+            "vsp_postproc_method": args.vsp_postproc_method,
+            "vsp_postproc_fallback": args.vsp_postproc_fallback,
+        }
+        # 只显示非 None 的参数
+        print(json.dumps({k: v for k, v in config_display.items() if v is not None}, indent=2, ensure_ascii=False))
+        sys.exit(0)
+
     # 如果未指定 save_path，创建 job 文件夹并设置输出路径
     auto_generated_save_path = args.save_path is None
     task_num = None  # 任务编号（用于最终重命名）
@@ -1607,6 +1696,7 @@ if __name__ == "__main__":
     # ============ 保存运行配置（供 job_fix.py 读取）============
     if temp_job_folder:
         run_config_to_save = {
+            "profile": args.profile,
             "mode": args.mode,
             "provider": args.provider,
             "model": args.model,

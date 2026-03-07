@@ -5,7 +5,7 @@
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--mode` | `"direct"` | 执行模式：`direct`（直接调用 LLM API）、`vsp`（VSP 子进程）、`comt_vsp`（CoMT 双任务 + VSP） |
-| `--provider` | `"openrouter"` | LLM 提供商：`openai`、`openrouter` |
+| `--provider` | `"openrouter"` | LLM 提供商：`openai`、`openrouter`、`self`（自部署，需配合 `--llm_base_url`） |
 | `--model` | `"gpt-5"` | 模型名称 |
 | `--temp` | `0.0` | Temperature |
 | `--top_p` | `1.0` | Top-p sampling |
@@ -95,6 +95,26 @@ OpenRouter 同一模型可能有多个底层提供商（如 `together`, `parasai
 
 - **direct 模式**：`--llm_base_url` 覆盖 OpenAI/OpenRouter 的默认端点，使用 OpenAI-compatible ChatCompletion 客户端
 - **vsp/comt_vsp 模式**：`--llm_base_url` 传递给 VSP 子进程的 `LLM_BASE_URL` 环境变量
+
+## Profile 系统
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--profile` | `None` | 使用预定义的参数 profile（如 `comt_vsp`、`autodl_qwen`），CLI 参数覆盖 profile 值 |
+| `--profile-file` | `"profiles.yaml"` | Profile 配置文件路径 |
+| `--list-profiles` | `false` | 列出所有可用的 profile 并退出 |
+| `--show-config` | `false` | 显示解析后的完整运行配置（JSON）并退出，不实际运行 |
+
+所有参数支持连字符和下划线两种写法（如 `--show-config` 和 `--show_config`）。
+
+详见 docs/profiles.md。
+
+## Tunnel
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--tunnel` | `"ssh"` | Tunnel 模式：`ssh`（SSH port forwarding）、`cf`（Cloudflare Tunnel）、`none`（跳过） |
+| `--no-ssh-tunnel` | `false` | [已废弃] 等价于 `--tunnel none` |
 
 ## 常用命令示例
 
