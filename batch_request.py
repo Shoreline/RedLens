@@ -143,13 +143,31 @@ def close_logging():
 # - 列表：需要遍历的参数变体
 args_combo = [
     # 固定参数
-    "--tunnel cf --sampling_rate 0.12",
-    # 需要遍历的参数变体：不同的 mode 组合
+    "--tunnel cf --sampling_rate 0.12 --sampling_seed 42",
     [
-        '--profile qwen235b',
-        '--profile comt_vsp_prebaked_ask',
-        '--profile comt_vsp_prebaked_sd_good',
-        '--profile comt_vsp_prebaked_sd_bad',
+        # ── Qwen3-VL 系列 (openrouter_provider: alibaba) ──
+        '--mode direct --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alibaba',
+        '--mode comt_vsp --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alibaba --comt_sample_id "deletion-0107"',
+        '--mode direct --model "qwen/qwen3-vl-32b-instruct" --openrouter_provider alibaba',
+        '--mode comt_vsp --model "qwen/qwen3-vl-32b-instruct" --openrouter_provider alibaba --comt_sample_id "deletion-0107"',
+        '--mode direct --model "qwen/qwen3-vl-235b-a22b-instruct" --openrouter_provider alibaba',
+        '--mode comt_vsp --model "qwen/qwen3-vl-235b-a22b-instruct" --openrouter_provider alibaba --comt_sample_id "deletion-0107"',
+
+        # ── Gemma 3 系列 (openrouter_provider: deepinfra) ──
+        '--mode direct --model "google/gemma-3-12b-it" --openrouter_provider deepinfra',
+        '--mode comt_vsp --model "google/gemma-3-12b-it" --openrouter_provider deepinfra --comt_sample_id "deletion-0107"',
+        '--mode direct --model "google/gemma-3-27b-it" --openrouter_provider deepinfra',
+        '--mode comt_vsp --model "google/gemma-3-27b-it" --openrouter_provider deepinfra --comt_sample_id "deletion-0107"',
+
+        # ── Llama 4 系列 (openrouter_provider: deepinfra) ──
+        '--mode direct --model "meta-llama/llama-4-scout" --openrouter_provider deepinfra',
+        '--mode comt_vsp --model "meta-llama/llama-4-scout" --openrouter_provider deepinfra --comt_sample_id "deletion-0107"',
+        '--mode direct --model "meta-llama/llama-4-maverick" --openrouter_provider deepinfra',
+        '--mode comt_vsp --model "meta-llama/llama-4-maverick" --openrouter_provider deepinfra --comt_sample_id "deletion-0107"',
+
+        # ── Pixtral / Mistral 系列 (openrouter_provider: mistral) ──
+        '--mode direct --model "mistralai/pixtral-large-2411" --openrouter_provider mistral',
+        '--mode comt_vsp --model "mistralai/pixtral-large-2411" --openrouter_provider mistral --comt_sample_id "deletion-0107"',
     ],
 ]
 
@@ -949,6 +967,7 @@ def generate_batch_summary_html(
                 </div>
                 <div>
                     <p><strong>Batch Folder:</strong> {os.path.basename(batch_folder)}</p>
+                    <p><a href="report/evaluation_report.html" class="summary-link">📊 Evaluation Report</a></p>
                 </div>
             </div>
             {f'<div class="stop-reason">⚠️ Stop Reason: {stop_reason}</div>' if stop_reason else ''}

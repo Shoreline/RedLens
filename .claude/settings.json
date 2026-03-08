@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C ~/code/VisualSketchpad commit -m \"$\\(cat <<''EOF''\nfeat: Add vision tool cache, lazy client init, per-turn timing, and output cleanup\n\n- Tool cache: content-based SHA-256 caching for segment_and_mark,\n  detection, and depth tools to avoid redundant Gradio calls\n- Lazy vision client initialization: connect to SOM/GD/DA services\n  only on first use instead of at import time\n- Per-turn timing: record duration and token usage for each LLM call\n  and code execution, saved as timing.json\n- Strip base64 images from output.json to reduce file size\n- Add docs/prebaked_structure.md\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")"
+    ]
+  }
+}

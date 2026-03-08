@@ -220,3 +220,4 @@ export REPLICATE_API_TOKEN="your_token_here"
 | `copy_sd_pictures.py` | 将 SD 生成图片复制到 prebaked_images 目录 |
 | `check_vsp_tool_usage.py` | 分析 VSP 工具使用统计 |
 | `batch_request.py` | 批量运行时在 HTML 报告中展示 postproc 配置 |
+| `test_sd_postproc.sh` | SD 后处理集成测试脚本 |

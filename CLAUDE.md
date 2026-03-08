@@ -97,7 +97,7 @@ Uses async producer-consumer pattern with configurable `--consumers` count. Item
 
 ### VSP Post-Processor
 
-VSP 推理完成后可启用后处理（`--vsp_postproc`），支持 `ask`/`sd`/`prebaked` 三种后端和多种图片处理方法。详见 docs/vsp_postprocessor.md。
+VSP 推理完成后可启用后处理（`--vsp_postproc`），支持 `ask`/`sd`/`prebaked` 三种后端和多种图片处理方法。详见 docs/vsp_post_processing.md。
 
 ### Output Organization
 
@@ -150,8 +150,8 @@ AutoDL 远程日志路径（通过 `ssh seetacloud` 访问）：
 - docs/profiles.md — Profile 配置系统使用指南
 - docs/cli_reference.md — request.py 全部命令行参数
 - docs/output_structure.md — output 目录详细结构和字段说明
-- docs/vsp_postprocessor.md — VSP 后处理器指南（简要索引）
-- docs/vsp_post_processing.md — VSP 后处理器详细文档（参数、后端、数据流、调试）
+- docs/vsp_post_processing.md — VSP 后处理器完整指南（后端、参数、数据流、调试）
 - docs/cf_tunnel.md — Cloudflare Tunnel 使用与原理
 - docs/compare_hidden_states.md — Hidden States 差异方向分析（流程、指标、输出）
+- docs/batch_requests_guidance.md — Batch Request 模型选取标准与配置示例
 - COMT_GUIDE.md — CoMT 模式完整指南
