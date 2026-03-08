@@ -508,6 +508,7 @@ def main():
         llm_base_url=llm_base_url,
         llm_api_key=args.llm_api_key,
         openrouter_provider=openrouter_provider,
+        vsp_override_images_dir=saved_cfg.get("vsp_override_images_dir") if saved_cfg else None,
     )
 
     # ---- 5. 环境准备（tunnel）----

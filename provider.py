@@ -393,7 +393,11 @@ class VSPProvider(BaseProvider):
             if job_folder:
                 job_folder = os.path.abspath(job_folder)
             env["VSP_JOB_FOLDER"] = job_folder
-        
+
+            # VSP Tool Override
+            if getattr(cfg, 'vsp_override_images_dir', None):
+                env["VSP_OVERRIDE_IMAGES_DIR"] = cfg.vsp_override_images_dir
+
         # LLM provider config for VSP subprocess — 按 provider 身份分支
         provider = getattr(cfg, 'provider', None) if cfg else None
         tunnel_urls = getattr(cfg, 'tunnel_urls', None) if cfg else None
@@ -415,9 +419,10 @@ class VSPProvider(BaseProvider):
         if cfg and getattr(cfg, 'openrouter_provider', None):
             env["OPENROUTER_PROVIDER"] = cfg.openrouter_provider
 
-        # 传递 prebaked processor 需要的上下文信息
+        # 传递 prebaked processor / tool override 需要的上下文信息
         if meta:
             env["VSP_MMSB_CATEGORY"] = meta.get("category", "")
+            env["VSP_MMSB_INDEX"] = str(meta.get("index", ""))
 
         # 对于 ComtVspProvider，传递 comt_sample_id
         if hasattr(self, 'comt_sample_id') and self.comt_sample_id:

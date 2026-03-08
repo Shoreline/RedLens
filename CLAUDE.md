@@ -97,7 +97,7 @@ Uses async producer-consumer pattern with configurable `--consumers` count. Item
 
 ### VSP Post-Processor
 
-VSP 推理完成后可启用后处理（`--vsp_postproc`），支持 `ask`/`sd`/`prebaked` 三种后端和多种图片处理方法。详见 docs/vsp_post_processing.md。
+VSP 推理完成后可启用后处理（`--vsp_postproc`），支持 `ask`/`sd`/`prebaked` 三种后端和多种图片处理方法。另有 Tool Override 机制（`--vsp_override_images_dir`），可替换 vision tool 返回的图片，跳过远程 tool 调用，用于 ablation study。详见 docs/vsp_post_processing.md。
 
 ### Output Organization
 

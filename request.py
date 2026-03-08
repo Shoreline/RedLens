@@ -308,6 +308,8 @@ class RunConfig:
     openrouter_provider: Optional[str] = None  # 指定 OpenRouter 底层提供商（如 "together", "parasail", "novita"）
     # Cloudflare Tunnel URLs (populated at runtime by --tunnel cf)
     tunnel_urls: Optional[Dict[str, str]] = None  # {"llm": "https://...", "grounding_dino": "https://...", ...}
+    # VSP Tool Override（替换 vision tool 返回的图片）
+    vsp_override_images_dir: Optional[str] = None  # override 图片目录（支持全局/类别/task 三级）
 
 # ============ 数据与 Prompt ============
 
@@ -1073,6 +1075,37 @@ def _generate_summary_html(
 </body>
 </html>'''
 
+def _copy_override_images_to_job(src_dir: str, job_folder: str):
+    """将 override 图片目录中的图片文件复制到 job 目录，并生成 override_info.json"""
+    import shutil
+    dst_dir = os.path.join(job_folder, "override_images")
+    image_exts = {'.png', '.jpg', '.jpeg'}
+    try:
+        os.makedirs(dst_dir, exist_ok=True)
+        files = []
+        for root, dirs, filenames in os.walk(src_dir):
+            for f in filenames:
+                if os.path.splitext(f)[1].lower() in image_exts:
+                    src_path = os.path.join(root, f)
+                    rel = os.path.relpath(src_path, src_dir)
+                    dst_path = os.path.join(dst_dir, rel)
+                    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                    shutil.copy2(src_path, dst_path)
+                    files.append(rel)
+        files.sort()
+        # 写 override_info.json
+        info = {
+            "source_dir": src_dir,
+            "copied_at": datetime.now().isoformat(),
+            "files": files,
+        }
+        with open(os.path.join(dst_dir, "override_info.json"), "w", encoding="utf-8") as f:
+            json.dump(info, f, indent=2, ensure_ascii=False)
+        print(f"📁 Override 图片已复制到 {dst_dir}（{len(files)} 个文件）")
+    except Exception as e:
+        print(f"⚠️  复制 override 图片失败: {e}")
+
+
 def clean_sensitive_paths(output_dir: str) -> Dict[str, int]:
     """
     清理输出目录中的绝对路径，将主目录路径替换为 ~
@@ -1497,6 +1530,11 @@ if __name__ == "__main__":
     parser.add_argument("--vsp_postproc_sd_guidance_scale", type=float, default=7.5,
                        help="SD guidance scale（默认: 7.5）")
 
+    # VSP Tool Override
+    parser.add_argument("--vsp_override_images_dir", default=None,
+                       help="VSP tool override 图片目录。启用后 vision tool 跳过远程调用，"
+                            "返回目录中的预备图片。支持全局/类别/task 三级粒度")
+
     # Custom LLM endpoint (for self-hosted models on AWS, etc.)
     parser.add_argument("--llm_base_url", default=None,
                        help="Custom LLM API base URL (e.g., http://34.210.214.193:8000/v1)")
@@ -1618,6 +1656,7 @@ if __name__ == "__main__":
             "vsp_postproc_backend": args.vsp_postproc_backend,
             "vsp_postproc_method": args.vsp_postproc_method,
             "vsp_postproc_fallback": args.vsp_postproc_fallback,
+            "vsp_override_images_dir": args.vsp_override_images_dir,
         }
         # 只显示非 None 的参数
         print(json.dumps({k: v for k, v in config_display.items() if v is not None}, indent=2, ensure_ascii=False))
@@ -1661,7 +1700,20 @@ if __name__ == "__main__":
     if not 0.0 <= args.sampling_rate <= 1.0:
         print(f"❌ 错误: sampling_rate 必须在 0.0 到 1.0 之间，当前值: {args.sampling_rate}")
         sys.exit(1)
-    
+
+    # 验证 VSP Tool Override 参数
+    if args.vsp_override_images_dir:
+        if args.mode == "direct":
+            print("❌ 错误: --vsp_override_images_dir 仅对 vsp/comt_vsp 模式有效")
+            sys.exit(1)
+        override_dir = os.path.expanduser(args.vsp_override_images_dir)
+        if not os.path.isdir(override_dir):
+            print(f"❌ 错误: override 图片目录不存在: {override_dir}")
+            sys.exit(1)
+        args.vsp_override_images_dir = os.path.abspath(override_dir)
+        if args.vsp_postproc:
+            print("⚠️  --vsp_override_images_dir 启用时 --vsp_postproc 将被忽略")
+
     cfg = RunConfig(
         mode=args.mode,
         provider=args.provider,
@@ -1691,6 +1743,7 @@ if __name__ == "__main__":
         llm_base_url=args.llm_base_url,
         llm_api_key=args.llm_api_key,
         openrouter_provider=args.openrouter_provider,
+        vsp_override_images_dir=args.vsp_override_images_dir,
     )
 
     # ============ 保存运行配置（供 job_fix.py 读取）============
@@ -1720,11 +1773,16 @@ if __name__ == "__main__":
             "vsp_postproc_backend": args.vsp_postproc_backend,
             "vsp_postproc_method": args.vsp_postproc_method,
             "vsp_postproc_fallback": args.vsp_postproc_fallback,
+            "vsp_override_images_dir": args.vsp_override_images_dir,
             "tunnel": tunnel_mode,
             "max_tasks": args.max_tasks,
         }
         with open(os.path.join(temp_job_folder, "run_config.json"), "w", encoding="utf-8") as f:
             json.dump(run_config_to_save, f, indent=2, ensure_ascii=False)
+
+        # 复制 override 图片到 job 目录
+        if args.vsp_override_images_dir:
+            _copy_override_images_to_job(args.vsp_override_images_dir, temp_job_folder)
 
     # ============ Tunnel (AutoDL) ============
     if cfg.mode in ("vsp", "comt_vsp") and tunnel_mode != "none":

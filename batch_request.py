@@ -210,6 +210,7 @@ class RunResult:
     vsp_postproc_method: Optional[str] = None       # postproc method (visual_mask/good/bad)
     vsp_postproc_sd_prompt: Optional[str] = None    # SD prompt
     comt_sample_id: Optional[str] = None    # COMT sample ID
+    vsp_override_images_dir: Optional[str] = None   # VSP Tool Override 图片目录
 
 
 def parse_args_str(args_str: str) -> dict:
@@ -269,7 +270,12 @@ def parse_args_str(args_str: str) -> dict:
     comt_sample_id_match = re.search(r'--comt_sample_id\s+(\S+)', args_str)
     if comt_sample_id_match:
         info['comt_sample_id'] = comt_sample_id_match.group(1)
-    
+
+    # 提取 vsp_override_images_dir
+    override_match = re.search(r'--vsp_override_images_dir\s+(\S+)', args_str)
+    if override_match:
+        info['vsp_override_images_dir'] = override_match.group(1).strip('"\'')
+
     return info
 
 
@@ -480,6 +486,7 @@ def run_request(args_str: str, run_index: int, total_runs: int) -> RunResult:
             vsp_postproc_method=args_info.get('vsp_postproc_method'),
             vsp_postproc_sd_prompt=args_info.get('vsp_postproc_sd_prompt'),
             comt_sample_id=args_info.get('comt_sample_id'),
+            vsp_override_images_dir=args_info.get('vsp_override_images_dir'),
         )
 
     except Exception as e:
@@ -508,6 +515,7 @@ def run_request(args_str: str, run_index: int, total_runs: int) -> RunResult:
             vsp_postproc_method=args_info.get('vsp_postproc_method'),
             vsp_postproc_sd_prompt=args_info.get('vsp_postproc_sd_prompt'),
             comt_sample_id=args_info.get('comt_sample_id'),
+            vsp_override_images_dir=args_info.get('vsp_override_images_dir'),
         )
 
 
@@ -831,6 +839,64 @@ def _build_config_comparison_html(configs: List[dict], results: List[RunResult])
     return html
 
 
+def _build_override_thumbnails(job_folder: Optional[str], override_dir: str, batch_folder: str) -> str:
+    """构建 override 图片的缩略图 HTML（base64 嵌入）"""
+    import base64
+    from io import BytesIO
+    try:
+        from PIL import Image
+    except ImportError:
+        return f"<span class='override-path'>{override_dir}</span>"
+
+    # 优先从 job_folder/override_images/ 读取（已复制的），否则从原始目录读
+    img_dir = None
+    if job_folder:
+        candidate = os.path.join(job_folder, "override_images")
+        if os.path.isdir(candidate):
+            img_dir = candidate
+    if not img_dir and os.path.isdir(override_dir):
+        img_dir = override_dir
+    if not img_dir:
+        return f"<span class='override-path'>{override_dir}</span>"
+
+    # 收集图片文件（只取顶层和第一层子目录的图片）
+    img_files = []
+    for entry in sorted(os.listdir(img_dir)):
+        full = os.path.join(img_dir, entry)
+        if os.path.isfile(full) and entry.lower().endswith(('.png', '.jpg', '.jpeg')):
+            img_files.append((entry, full))
+        elif os.path.isdir(full) and entry != '__pycache__':
+            for sub in sorted(os.listdir(full)):
+                sub_full = os.path.join(full, sub)
+                if os.path.isfile(sub_full) and sub.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    img_files.append((f"{entry}/{sub}", sub_full))
+
+    if not img_files:
+        return f"<span class='override-path'>{override_dir} (empty)</span>"
+
+    # 生成缩略图（最多 4 张）
+    max_thumbs = 4
+    thumbs_html = ""
+    for name, path in img_files[:max_thumbs]:
+        try:
+            img = Image.open(path).convert("RGB")
+            img.thumbnail((60, 60))
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            thumbs_html += f'<img class="override-thumb" src="data:image/png;base64,{b64}" title="{name}">'
+        except Exception:
+            continue
+
+    remaining = len(img_files) - max_thumbs
+    if remaining > 0:
+        thumbs_html += f'<span class="override-path">+{remaining} more</span>'
+
+    # 显示路径（用 ~ 缩短）
+    display_dir = override_dir.replace(os.path.expanduser("~"), "~")
+    return f'{thumbs_html}<br><span class="override-path">{display_dir}</span>'
+
+
 def generate_batch_summary_html(
     batch_folder: str,
     batch_num: int,
@@ -887,7 +953,16 @@ def generate_batch_summary_html(
             vsp_postproc_info = "<br>".join(parts) if parts else "✓"
         else:
             vsp_postproc_info = "-"
-        
+
+        # Override 图片信息
+        if r.vsp_override_images_dir:
+            override_html = _build_override_thumbnails(r.job_folder, r.vsp_override_images_dir, batch_folder)
+            override_section = f"<div class='override-info'><span class='vsp-method' style='background:rgba(0,150,136,0.3);color:#4db6ac;'>override</span><br>{override_html}</div>"
+            if vsp_postproc_info == "-":
+                vsp_postproc_info = override_section
+            else:
+                vsp_postproc_info = override_section + "<br>" + vsp_postproc_info
+
         jobs_html += f'''
         <tr class="{status_class}">
             <td>{r.run_index}</td>
@@ -930,6 +1005,9 @@ def generate_batch_summary_html(
         .model-cell {{ max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
         .vsp-postproc-cell {{ font-size: 0.85em; color: #bbb; line-height: 1.6; max-width: 350px; }}
         .vsp-method {{ background: rgba(138, 43, 226, 0.3); color: #da70d6; padding: 2px 8px; border-radius: 8px; font-weight: bold; display: inline-block; margin-bottom: 2px; }}
+        .override-info {{ margin-bottom: 4px; }}
+        .override-thumb {{ width: 40px; height: 40px; object-fit: cover; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); margin-right: 4px; vertical-align: middle; }}
+        .override-path {{ color: #aaa; font-size: 0.8em; font-family: 'SF Mono', Menlo, monospace; }}
         .status-badge {{ padding: 4px 10px; border-radius: 12px; font-size: 0.85em; font-weight: bold; }}
         .status-badge.success {{ background: rgba(0, 255, 136, 0.2); color: #00ff88; }}
         .status-badge.failed {{ background: rgba(255, 107, 107, 0.2); color: #ff6b6b; }}

@@ -211,6 +211,53 @@ export REPLICATE_API_TOKEN="your_token_here"
 - 增加 `--vsp_postproc_sd_num_steps`（如 50）
 - 调整 `--vsp_postproc_sd_guidance_scale`（尝试 8-10）
 
+## VSP Tool Override（图片替换）
+
+独立于后处理的简化机制：直接替换 VSP vision tool 返回的图片，跳过远程 tool 调用。
+
+### 参数
+
+| 参数 | 说明 |
+|------|------|
+| `--vsp_override_images_dir` | 预备图片目录。启用后 vision tool 跳过远程调用，返回该目录中的图片 |
+
+### 图片目录结构
+
+支持三级粒度，按优先级查找（first match wins）：
+
+```
+override_images/
+├── default.png                      # 全局兜底
+├── 01-Illegal_Activity.png          # 类别级
+├── 03-Physical_Harm/                # task 级
+│   ├── default.png                  # 该类别兜底
+│   ├── 0.png                        # task index 0
+│   └── 1.png
+└── ...
+```
+
+查找顺序：`{dir}/{category}/{index}.png` → `{dir}/{category}/default.png` → `{dir}/{category}.png` → `{dir}/default.png`
+
+### 使用示例
+
+```bash
+# 所有 task 使用同一张全黑图
+python request.py --mode comt_vsp --vsp_override_images_dir ~/data/override_black/ \
+  --comt_sample_id "deletion-0107" --max_tasks 10
+
+# 按类别使用不同图片
+python request.py --mode comt_vsp --vsp_override_images_dir ~/data/override_by_category/ \
+  --comt_sample_id "deletion-0107" --max_tasks 10
+```
+
+### 与后处理的关系
+
+Override 在 tool 调用最前端拦截，跳过远程调用、tool cache 和 post-processing。`--vsp_postproc` 在 override 启用时会被忽略。
+
+### 输出
+
+启用 override 时，job 目录新增 `override_images/` 子目录，包含所有使用的 override 图片副本和 `override_info.json`。Batch 报告中显示 override 图片缩略图。
+
 ## 相关文件
 
 | 文件 | 说明 |
@@ -219,5 +266,5 @@ export REPLICATE_API_TOKEN="your_token_here"
 | `provider.py` | `VSPProvider._call_vsp()` 传递环境变量 |
 | `copy_sd_pictures.py` | 将 SD 生成图片复制到 prebaked_images 目录 |
 | `check_vsp_tool_usage.py` | 分析 VSP 工具使用统计 |
-| `batch_request.py` | 批量运行时在 HTML 报告中展示 postproc 配置 |
+| `batch_request.py` | 批量运行时在 HTML 报告中展示 postproc/override 配置 |
 | `test_sd_postproc.sh` | SD 后处理集成测试脚本 |
