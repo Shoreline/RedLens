@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Mediator is a Python framework for inference and evaluation on the MM-SafetyBench multimodal safety dataset. It sends questions with images to LLMs, collects responses, then uses a GPT judge to evaluate whether responses are safe or unsafe, computing attack rates by category.
+RedLens is a Python framework for inference and evaluation on the MM-SafetyBench multimodal safety dataset. It sends questions with images to LLMs, collects responses, then uses a GPT judge to evaluate whether responses are safe or unsafe, computing attack rates by category.
 
 ## Quick Commands
 

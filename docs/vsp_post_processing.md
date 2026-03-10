@@ -90,7 +90,7 @@ VSP vision tools (detection / segment_and_mark)
 
 ### 环境变量传递
 
-Mediator 通过环境变量将配置传递给 VSP 子进程：
+RedLens 通过环境变量将配置传递给 VSP 子进程：
 
 | 环境变量 | 对应参数 |
 |----------|----------|

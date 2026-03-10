@@ -15,7 +15,7 @@
 
 ### `--mode` 与 `--provider` 的关系
 
-- **`--mode direct`**：Mediator 直接调用 LLM API。`--provider` 选择端点（openai / openrouter），`--llm_base_url` 覆盖默认端点
+- **`--mode direct`**：RedLens 直接调用 LLM API。`--provider` 选择端点（openai / openrouter），`--llm_base_url` 覆盖默认端点
 - **`--mode vsp` / `--mode comt_vsp`**：通过 VSP 子进程执行。`--provider` 控制 VSP 内部使用的 LLM 端点
 - **优先级**：`--llm_base_url`（最高）> `--provider`（默认端点）
 

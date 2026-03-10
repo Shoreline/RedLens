@@ -6,9 +6,9 @@ Run the CoMT-VSP agent pipeline against self-hosted open-source VL models on Aut
 
 ## Current State
 
-### Mediator → VisualSketchPad (existing flow)
+### RedLens → VisualSketchPad (existing flow)
 ```
-Mediator (provider.py ComtVspProvider)
+RedLens (provider.py ComtVspProvider)
   → subprocess: VisualSketchPad/agent/main.py run_agent(..., model="xxx")
     → config.py: base_url configurable via LLM_BASE_URL env var (default: OpenRouter)
       → AutoGen OpenAIWrapper → HTTP POST to LLM endpoint
@@ -57,7 +57,7 @@ GROUNDING_DINO_ADDRESS = "http://localhost:17860"
 DEPTH_ANYTHING_ADDRESS = "http://localhost:17861"
 ```
 
-**Mediator LLM endpoint** — pass `--llm_base_url http://localhost:18000/v1` instead of the old AWS IP.
+**RedLens LLM endpoint** — pass `--llm_base_url http://localhost:18000/v1` instead of the old AWS IP.
 
 ## Approach: Model-Agnostic API Server on AutoDL
 
@@ -96,14 +96,14 @@ AutoGen ignores the extra `hidden_state` field (it only reads `choices`).
 Made `base_url` and `api_key` configurable via `LLM_BASE_URL` and `LLM_API_KEY` environment variables,
 falling back to OpenRouter defaults (`OPENROUTER_API_KEY` / `https://openrouter.ai/api/v1`).
 
-### Step 3: Pass endpoint config from Mediator to VSP subprocess — DONE
-**File**: `~/code/Mediator/provider.py` — `VSPProvider._call_vsp()`
+### Step 3: Pass endpoint config from RedLens to VSP subprocess — DONE
+**File**: `~/code/RedLens/provider.py` — `VSPProvider._call_vsp()`
 
 Passes `LLM_BASE_URL` and `LLM_API_KEY` as environment variables to the subprocess.
 When `llm_base_url` is set but `llm_api_key` is not, defaults to `"not-needed"`.
 
-### Step 4: Add CLI arguments in Mediator — DONE
-**File**: `~/code/Mediator/request.py`
+### Step 4: Add CLI arguments in RedLens — DONE
+**File**: `~/code/RedLens/request.py`
 
 Added `--llm_base_url` and `--llm_api_key` CLI arguments + `RunConfig` fields.
 
@@ -117,15 +117,15 @@ Update `SOM_ADDRESS`, `GROUNDING_DINO_ADDRESS`, `DEPTH_ANYTHING_ADDRESS` to use 
 with forwarded ports (17862, 17860, 17861). Ideally make these configurable via environment
 variables like the LLM endpoint.
 
-### Step 7: Capture hidden states in Mediator — DONE
+### Step 7: Capture hidden states in RedLens — DONE
 **Files**:
 - `~/code/VisualSketchPad/agent/multimodal_conversable_agent.py` — capture `hidden_state` from API response in `generate_oai_reply()`
 - `~/code/VisualSketchPad/agent/main.py` — save captured hidden states to `hidden_states.json` in task output directory
-- `~/code/Mediator/provider.py`:
+- `~/code/RedLens/provider.py`:
   - `VSPProvider._save_hidden_states()` — 读取 VSP 子进程输出的 `hidden_states.json`，按轮次保存 `.npy` 文件（VSP/CoMT-VSP 模式）
   - `OpenRouterProvider._maybe_save_hidden_states()` — 从 API 响应的 `model_extra` 中提取 `hidden_state`，保存 `.npy` 文件（Direct 模式）
   - `get_provider()` — 当 `llm_base_url` 被设置时，创建 `OpenRouterProvider(capture_hidden_states=True)`
-- `~/code/Mediator/request.py` — `create_prompt()` 的 meta 始终包含 `index`（用于 hidden states 文件命名）
+- `~/code/RedLens/request.py` — `create_prompt()` 的 meta 始终包含 `index`（用于 hidden states 文件命名）
 
 Hidden states 捕获与 mode 无关，只要使用 `--llm_base_url`（自部署端点），所有模式均自动捕获。
 
@@ -142,8 +142,8 @@ Also slimmed down `_save_vsp_metadata()` to remove redundant `prompt_struct` (ba
 | Local | `~/code/VisualSketchPad/agent/config.py` | Done (Step 2), TODO (Step 6: update addresses) |
 | Local | `~/code/VisualSketchPad/agent/multimodal_conversable_agent.py` | Done (Step 7: hidden state capture) |
 | Local | `~/code/VisualSketchPad/agent/main.py` | Done (Step 7: hidden state save to JSON) |
-| Local | `~/code/Mediator/provider.py` | Done (Step 3, 7: hidden states capture for all modes + metadata slimming) |
-| Local | `~/code/Mediator/request.py` | Done (Step 4, 7: CLI args + meta always includes index) |
+| Local | `~/code/RedLens/provider.py` | Done (Step 3, 7: hidden states capture for all modes + metadata slimming) |
+| Local | `~/code/RedLens/request.py` | Done (Step 4, 7: CLI args + meta always includes index) |
 
 ## Usage
 
@@ -166,7 +166,7 @@ curl -s http://localhost:18000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"Qwen3-VL-8B-Instruct","messages":[{"role":"user","content":"Say hello."}],"max_tokens":32,"temperature":0.7}'
 
-# 4. Run Mediator pointing to AutoDL (via SSH tunnel)
+# 4. Run RedLens pointing to AutoDL (via SSH tunnel)
 python request.py --mode comt_vsp --model "Qwen3-VL-8B-Instruct" \
   --llm_base_url "http://localhost:18000/v1" \
   --comt_sample_id "deletion-0107" --max_tasks 10

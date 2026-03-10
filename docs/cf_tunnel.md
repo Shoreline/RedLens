@@ -75,8 +75,8 @@ cloudflared tunnel login
 ### 步骤 3: 创建 Tunnel
 
 ```bash
-cloudflared tunnel create autodl-mediator
-# 输出: Created tunnel autodl-mediator with id <UUID>
+cloudflared tunnel create autodl-redlens
+# 输出: Created tunnel autodl-redlens with id <UUID>
 # 凭证文件: /root/.cloudflared/<UUID>.json
 ```
 
@@ -87,10 +87,10 @@ cloudflared tunnel create autodl-mediator
 将 `yourdomain.com` 替换为你的实际域名：
 
 ```bash
-cloudflared tunnel route dns autodl-mediator llm.yourdomain.com
-cloudflared tunnel route dns autodl-mediator dino.yourdomain.com
-cloudflared tunnel route dns autodl-mediator depth.yourdomain.com
-cloudflared tunnel route dns autodl-mediator som.yourdomain.com
+cloudflared tunnel route dns autodl-redlens llm.yourdomain.com
+cloudflared tunnel route dns autodl-redlens dino.yourdomain.com
+cloudflared tunnel route dns autodl-redlens depth.yourdomain.com
+cloudflared tunnel route dns autodl-redlens som.yourdomain.com
 ```
 
 每条命令会在 Cloudflare DNS 中自动创建 CNAME 记录。如果某条因网络超时失败，重试即可。
@@ -100,7 +100,7 @@ cloudflared tunnel route dns autodl-mediator som.yourdomain.com
 在 AutoDL 上创建 `/root/.cloudflared/config.yml`（将 `<UUID>` 和域名替换为实际值）：
 
 ```yaml
-tunnel: autodl-mediator
+tunnel: autodl-redlens
 credentials-file: /root/.cloudflared/<UUID>.json
 protocol: http2
 
@@ -122,11 +122,11 @@ ingress:
 
 ### 步骤 6: 创建本地配置
 
-在 Mediator 项目根目录创建 `.cf_named_tunnel.json`（已 gitignore）：
+在 RedLens 项目根目录创建 `.cf_named_tunnel.json`（已 gitignore）：
 
 ```json
 {
-  "tunnel_name": "autodl-mediator",
+  "tunnel_name": "autodl-redlens",
   "config_file": "/root/.cloudflared/config.yml",
   "domain": "yourdomain.com",
   "services": {
@@ -216,7 +216,7 @@ Mac (美国)                        Cloudflare CDN                    AutoDL (�
 ```json
 {
   "tunnel_type": "named",
-  "tunnel_name": "autodl-mediator",
+  "tunnel_name": "autodl-redlens",
   "tunnels": {
     "llm": {"local_port": 8000, "url": "https://llm.yuantian.me"},
     "grounding_dino": {"local_port": 7860, "url": "https://dino.yuantian.me"},

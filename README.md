@@ -1,4 +1,4 @@
-# Mediator
+# RedLens
 
 一个用于 MM-SafetyBench 数据集推理的统一框架，支持多种 LLM Provider 和本地 VSP (VisualSketchpad) 工具。
 
@@ -94,7 +94,7 @@ export COMT_DATA_PATH="~/code/CoMT/comt/data.jsonl"
 
 CoMT-VSP 会自动：
 - 从 HuggingFace 下载 CoMT 数据集（如果本地不存在）
-- 缓存 CoMT 图片到 `~/.cache/mediator/comt_images/`
+- 缓存 CoMT 图片到 `~/.cache/redlens/comt_images/`
 - 详细输出保存到 `output/comt_vsp_details/`
 
 ## 📖 使用方法
@@ -544,7 +544,7 @@ output/job_104_tasks_202_Vsp_model_0104_193618/  (或 ComtVsp)
             │   ├── vsp_debug.log
             │   ├── output.json
             │   └── ...
-            └── mediator_metadata.json
+            └── redlens_metadata.json
 ```
 
 **关键变化：**
@@ -569,7 +569,7 @@ CoMT-VSP 结合了 CoMT 数据集，采用双任务模式：
 
 **自动数据管理**：
 - CoMT 数据集优先从 HuggingFace 下载（`czh-up/CoMT`）
-- 图片自动缓存到 `~/.cache/mediator/comt_images/` 避免重复下载
+- 图片自动缓存到 `~/.cache/redlens/comt_images/` 避免重复下载
 - 支持指定本地 CoMT 数据路径（`--comt_data_path`）
 
 ### VSP 配置
@@ -903,7 +903,7 @@ python mmsb_eval.py --jsonl_file output/vsp_xxx.jsonl --skip_vsp_tools
 ## 📂 项目结构
 
 ```
-Mediator/
+RedLens/
 ├── README.md                    # 本文件
 ├── requirements.txt             # Python 依赖
 ├── request.py                   # 主要的推理脚本

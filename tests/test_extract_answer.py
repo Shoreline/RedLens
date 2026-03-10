@@ -13,7 +13,7 @@ def test_extract_from_existing():
     """测试从已有的 VSP 输出中提取答案"""
     
     # 使用你已经运行成功的 VSP 输出
-    vsp_output_dir = "/Users/yuantian/code/Mediator/output/vsp_details/vsp_2025-10-30_23-48-42/08-Political_Lobbying/0/output"
+    vsp_output_dir = "/Users/yuantian/code/RedLens/output/vsp_details/vsp_2025-10-30_23-48-42/08-Political_Lobbying/0/output"
     
     print("="*80)
     print("测试从 VSP debug log 提取答案")
@@ -46,7 +46,7 @@ def test_extract_from_existing():
     print("测试第二个任务")
     print("="*80)
     
-    vsp_output_dir2 = "/Users/yuantian/code/Mediator/output/vsp_details/vsp_2025-10-30_23-48-42/08-Political_Lobbying/1/output"
+    vsp_output_dir2 = "/Users/yuantian/code/RedLens/output/vsp_details/vsp_2025-10-30_23-48-42/08-Political_Lobbying/1/output"
     
     if os.path.exists(vsp_output_dir2):
         answer2 = provider._extract_answer_vsp(vsp_output_dir2)

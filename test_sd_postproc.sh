@@ -24,7 +24,7 @@ echo ""
 echo "Running test with 1 task..."
 echo ""
 
-cd /Users/yuantian/code/Mediator
+cd /Users/yuantian/code/RedLens
 
 # Activate venv
 source venv/bin/activate

@@ -43,7 +43,7 @@ job_171_tasks_1_ComtVsp_Qwen3-VL-8B-Instruct_0216_192859/
                 │   │   └── hidden_states.json  # 中间格式（仅自定义端点）
                 │   │   └── ...
                 │   └── ...
-                └── mediator_metadata.json  # VSP 执行元数据（精简版）
+                └── redlens_metadata.json  # VSP 执行元数据（精简版）
 ```
 
 ### JSONL 字段说明
@@ -59,7 +59,7 @@ job_171_tasks_1_ComtVsp_Qwen3-VL-8B-Instruct_0216_192859/
 当使用 `--llm_base_url` 指向自部署模型（如 Qwen）且服务端返回 `hidden_state` 字段时，**所有模式（direct / vsp / comt_vsp）** 均会自动捕获并保存：
 
 - **Direct 模式**：从 API 响应的 `model_extra`（pydantic extra fields）中提取 `hidden_state`，每个 task 保存一个 `.npy` 文件
-- **VSP / CoMT-VSP 模式**：VSP 子进程将 hidden states 写入 `hidden_states.json`，Mediator 读取后按轮次保存为多个 `.npy` 文件
+- **VSP / CoMT-VSP 模式**：VSP 子进程将 hidden states 写入 `hidden_states.json`，RedLens 读取后按轮次保存为多个 `.npy` 文件
 
 每个 task 的每轮 LLM 调用生成一个 `.npy` 文件，命名为 `{cat}_{index}_q{question}_t{turn}.npy`：
 - `{cat}` — 类别编号（如 `08`）
@@ -100,7 +100,7 @@ for f in hs_dir.glob("*_turns.json"):
     final_hs[tid] = np.load(hs_dir / f"{tid}_t{meta[-1]['turn']}.npy")
 ```
 
-### mediator_metadata.json（VSP/CoMT-VSP）
+### redlens_metadata.json（VSP/CoMT-VSP）
 
 精简版元数据，位于每个 task 的 `details/` 子目录下：
 - `extracted_answer` — 从 VSP debug log 提取的最终答案文本

@@ -513,7 +513,7 @@ class VSPProvider(BaseProvider):
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
-        metadata_file = os.path.join(output_dir, "mediator_metadata.json")
+        metadata_file = os.path.join(output_dir, "redlens_metadata.json")
         with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
@@ -717,7 +717,7 @@ class ComtVspProvider(VSPProvider):
         self.comt_images_dir = None
         
         # 创建 CoMT 图片缓存目录
-        self.comt_image_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "mediator", "comt_images")
+        self.comt_image_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "redlens", "comt_images")
         os.makedirs(self.comt_image_cache_dir, exist_ok=True)
         
         self._load_comt_dataset()
