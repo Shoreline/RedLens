@@ -1,12 +1,29 @@
-# OpenAI API
+# OpenAI API (used by direct/openrouter providers and eval judge)
 openai>=1.0.0
 
 # Async HTTP client (for Qwen/VSP providers)
 aiohttp>=3.9.0
 
-# Rate limiting (optional, for advanced rate control)
+# Rate limiting
 aiolimiter>=1.1.0
 
 # Environment variables management
 python-dotenv>=1.0.0
 
+# Data processing
+numpy>=1.24.0
+pandas>=2.0.0
+pillow>=10.0.0
+
+# YAML config (profiles.yaml)
+pyyaml>=6.0
+
+# HuggingFace (CoMT dataset download)
+datasets>=2.14.0
+huggingface_hub>=0.19.0
+
+# ML metrics (refusal direction analysis)
+scikit-learn>=1.3.0
+
+# Report generation
+matplotlib>=3.7.0

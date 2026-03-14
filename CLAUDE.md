@@ -124,6 +124,7 @@ All output goes to `output/`. Detailed structure documented in docs/output_struc
 | `cleanup_output.py` | Cleans up output directories |
 | `view_jsonl.py` | JSONL file viewer/converter |
 | `compare_hidden_states.py` | Cross-job hidden states difference direction analysis |
+| `refusal_direction.py` | Refusal Direction (Difference in Means) hidden states classifier |
 | `tools/cf_tunnel.py` | Cloudflare Tunnel 管理（start/stop/status） |
 
 ## Configuration
@@ -153,5 +154,6 @@ AutoDL 远程日志路径（通过 `ssh seetacloud` 访问）：
 - docs/vsp_post_processing.md — VSP 后处理器完整指南（后端、参数、数据流、调试）
 - docs/cf_tunnel.md — Cloudflare Tunnel 使用与原理
 - docs/compare_hidden_states.md — Hidden States 差异方向分析（流程、指标、输出）
+- docs/refusal_direction.md — Refusal Direction 分析（Difference in Means 分类器）
 - docs/batch_requests_guidance.md — Batch Request 模型选取标准与配置示例
 - COMT_GUIDE.md — CoMT 模式完整指南

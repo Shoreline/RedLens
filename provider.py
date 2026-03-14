@@ -548,37 +548,25 @@ class VSPProvider(BaseProvider):
             file_prefix = f"{cat_num}_{index}" if cat_num else index
 
             # 按子任务(question)和轮次(turn)保存 .npy 文件
-            # 通过 content_preview 中的 THOUGHT 编号检测子任务边界：编号重置说明进入新子任务
+            # 通过 debug log 中的 RESULT 标记确定子任务边界（CoMT-VSP 多任务场景）
             import re
-            turns_meta = []
-            question_idx = 0
-            turn_in_question = 0
-            prev_thought_num = -1
 
-            for entry in hs_list:
+            # 从 debug log 确定 q1 起始 entry 索引
+            q1_start = self._detect_q1_boundary(vsp_output_dir, hs_list)
+
+            turns_meta = []
+            turn_counters = {}  # question_idx → 当前 turn 编号
+            for i, entry in enumerate(hs_list):
                 hs_data = entry.get("hidden_state", {})
                 last_token = hs_data.get("last_token")
                 if last_token is None:
                     continue
 
-                # 解析 THOUGHT 编号，检测子任务边界
+                question_idx = 0 if (q1_start is None or i < q1_start) else 1
+                turn_in_question = turn_counters.get(question_idx, 0)
+                turn_counters[question_idx] = turn_in_question + 1
+
                 preview = entry.get("content_preview", "")
-                thought_match = re.match(r"THOUGHT\s+(\d+)", preview)
-                if thought_match:
-                    thought_num = int(thought_match.group(1))
-                elif re.match(r"THOUGHT\s*:", preview):
-                    # "THOUGHT:" 无编号，视为 THOUGHT 0（新子任务的开头）
-                    thought_num = 0
-                else:
-                    thought_num = None
-
-                if thought_num is not None:
-                    if thought_num <= prev_thought_num:
-                        # THOUGHT 编号未递增，说明进入了新的子任务
-                        question_idx += 1
-                        turn_in_question = 0
-                    prev_thought_num = thought_num
-
                 arr = np.array(last_token, dtype=np.float32)  # shape: (hidden_dim,)
                 np.save(os.path.join(hs_dir, f"{file_prefix}_q{question_idx}_t{turn_in_question}.npy"), arr)
 
@@ -587,7 +575,7 @@ class VSPProvider(BaseProvider):
                     "turn": turn_in_question,
                     "content_preview": preview,
                 })
-                turn_in_question += 1
+
 
             # 保存轮次元数据
             if turns_meta:
@@ -612,10 +600,54 @@ class VSPProvider(BaseProvider):
         except Exception as e:
             print(f"Warning: Failed to save hidden states for index {index}: {e}")
 
+    def _detect_q1_boundary(self, vsp_output_dir: str, hs_list: list) -> 'int | None':
+        """通过 debug log 的 RESULT 标记确定 q1 起始 entry 索引。
+
+        CoMT-VSP 模式下，debug log 包含多个 "# RESULT #:" 标记，最后一个对应
+        follow-up 注入后的 q1 任务。用最后一个 RESULT 块中的第一个 THOUGHT 的
+        content_preview 与 hs_list 匹配，确定 q1 的起始 entry。
+
+        返回 q1 起始 entry 在 hs_list 中的索引，如果只有一个任务则返回 None。
+        """
+        import re
+
+        debug_log_path = os.path.join(vsp_output_dir, "vsp_debug.log")
+        if not os.path.exists(debug_log_path):
+            return None
+
+        try:
+            with open(debug_log_path, "r", encoding="utf-8") as f:
+                log_content = f.read()
+
+            # 找倒数第二个和最后一个 RESULT 标记
+            result_positions = [m.start() for m in re.finditer(r"# RESULT #:", log_content)]
+            if len(result_positions) < 2:
+                return None  # 只有一个 RESULT → 单任务，无 q1
+
+            # 最后一个 RESULT 块中提取第一个 THOUGHT 的前 40 字符
+            last_result_section = log_content[result_positions[-1]:]
+            thought_match = re.search(r'THOUGHT\s*\d*:\s*(.{30,50})', last_result_section)
+            if not thought_match:
+                return None
+
+            q1_text = thought_match.group(1)[:40]
+
+            # 在 hs_list 中匹配
+            for i, entry in enumerate(hs_list):
+                preview = entry.get("content_preview", "")
+                preview_core = re.sub(r'^THOUGHT\s*\d*:\s*', '', preview)[:40]
+                if preview_core == q1_text:
+                    return i
+
+        except Exception:
+            pass
+
+        return None
+
     def _extract_answer_vsp(self, vsp_output_dir: str) -> str:
         """
         从VSP的debug log中提取最终答案（VSP专用方法）
-        
+
         VSP的答案格式：debug log 中最后一个 "ANSWER: ... TERMINATE" 块
         """
         debug_log_path = os.path.join(vsp_output_dir, "vsp_debug.log")
