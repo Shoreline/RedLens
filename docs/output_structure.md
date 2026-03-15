@@ -115,22 +115,28 @@ for f in hs_dir.glob("*_turns.json"):
 
 ### Batch 目录内容
 
+Job 目录始终位于 `output/` 顶层（与独立运行的 job 一致），batch 目录下只存放指向它们的 **符号链接**。这样无论从 `output/job_xxx/` 还是 `output/batch_xx/job_xxx/` 都能访问到同一份数据。
+
 ```
-batch_7_0208_104209/
-├── batch.log                   # 批次运行完整日志
-├── batch_summary.html          # 批次汇总报告（含配置对比表）
-├── batch_state.json            # 运行状态（用于断点续传 --resume）
-├── run_configs.json            # 各 job 运行配置汇总（便于对比差异）
-├── job_164_tasks_202_.../      # 各个子任务的 job 目录
+output/
+├── job_164_tasks_202_.../      # 真实 job 目录（独立存在）
 ├── job_165_tasks_202_.../
 ├── ...
-└── report/                     # 跨任务对比报表
-    ├── evaluation_report.html  # HTML 评估报告
-    ├── chart_1_*.png           # 按模型/方法的汇总图表
-    ├── chart_1_*_overall.png   # 总体攻击率图表
-    ├── chart_category_*.png    # 按类别的攻击率图表
-    ├── chart_global_*.png      # 全局对比图表
-    └── ...
+└── batch_7_0208_104209/
+    ├── batch.log                   # 批次运行完整日志
+    ├── batch_summary.html          # 批次汇总报告（含配置对比表）
+    ├── batch_state.json            # 运行状态（用于断点续传 --resume）
+    ├── run_configs.json            # 各 job 运行配置汇总（便于对比差异）
+    ├── job_164_tasks_202_... -> ../job_164_tasks_202_.../  # symlink
+    ├── job_165_tasks_202_... -> ../job_165_tasks_202_.../  # symlink
+    ├── ...
+    └── report/                     # 跨任务对比报表
+        ├── evaluation_report.html  # HTML 评估报告
+        ├── chart_1_*.png           # 按模型/方法的汇总图表
+        ├── chart_1_*_overall.png   # 总体攻击率图表
+        ├── chart_category_*.png    # 按类别的攻击率图表
+        ├── chart_global_*.png      # 全局对比图表
+        └── ...
 ```
 
 ### run_configs.json

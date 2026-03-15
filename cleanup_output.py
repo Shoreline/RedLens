@@ -265,22 +265,65 @@ def print_cleanup_summary(cleanup_candidates: Dict[str, Dict]):
     print(f"{'='*80}\n")
 
 
-def delete_job_folder(folder_path: str) -> bool:
+def remove_symlinks_to_job(job_path: str, output_dir: str = 'output'):
+    """删除所有 batch 目录中指向该 job 的符号链接"""
+    import glob as _glob
+
+    job_name = os.path.basename(job_path)
+    real_path = os.path.realpath(job_path)
+
+    for batch_dir in _glob.glob(os.path.join(output_dir, 'batch_*')):
+        if not os.path.isdir(batch_dir):
+            continue
+        link = os.path.join(batch_dir, job_name)
+        if os.path.islink(link):
+            try:
+                if os.path.realpath(link) == real_path:
+                    os.unlink(link)
+                    print(f"  🔗 已移除符号链接: {link}")
+            except Exception:
+                pass
+
+
+def delete_job_folder(folder_path: str, output_dir: str = 'output') -> bool:
     """
-    删除 job 文件夹
-    
+    删除 job 文件夹，同时清理 batch 中指向它的符号链接
+
     Returns:
         True if successful, False otherwise
     """
     import shutil
-    
+
     try:
+        remove_symlinks_to_job(folder_path, output_dir)
         shutil.rmtree(folder_path)
         print(f"  ✅ 已删除: {folder_path}")
         return True
     except Exception as e:
         print(f"  ❌ 删除失败 {folder_path}: {e}")
         return False
+
+
+def cleanup_empty_batches(output_dir: str = 'output') -> List[str]:
+    """删除所有不再包含任何 job 链接的 batch 目录"""
+    import shutil
+    import glob as _glob
+
+    deleted = []
+    for batch_dir in sorted(_glob.glob(os.path.join(output_dir, 'batch_*'))):
+        if not os.path.isdir(batch_dir):
+            continue
+        has_job = any(
+            entry.startswith('job_')
+            for entry in os.listdir(batch_dir)
+            if os.path.islink(os.path.join(batch_dir, entry))
+               or os.path.isdir(os.path.join(batch_dir, entry))
+        )
+        if not has_job:
+            shutil.rmtree(batch_dir)
+            print(f"  🗑️  已删除空 batch 目录: {batch_dir}")
+            deleted.append(batch_dir)
+    return deleted
 
 
 def main():
@@ -394,14 +437,19 @@ def main():
         else:
             print(f"\n🗑️  删除 {folder_name} (temp):")
         
-        if delete_job_folder(folder_path):
+        if delete_job_folder(folder_path, args.output_dir):
             deleted_count += 1
-    
+
+    # 清理没有 job 链接的空 batch 目录
+    deleted_batches = cleanup_empty_batches(args.output_dir)
+
     # 打印完成摘要
     print(f"\n{'='*80}")
     print(f"✅ 清理完成！")
     print(f"{'='*80}")
     print(f"已删除: {deleted_count} 个 job 文件夹")
+    if deleted_batches:
+        print(f"已删除: {len(deleted_batches)} 个空 batch 目录")
     print(f"{'='*80}\n")
 
 

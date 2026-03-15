@@ -143,31 +143,16 @@ def close_logging():
 # - 列表：需要遍历的参数变体
 args_combo = [
     # 固定参数
-    "--tunnel cf --sampling_rate 0.12 --sampling_seed 42",
+    "--tunnel cf --sampling_rate 0.12",
+    # 需要遍历的参数变体：不同的 mode 组合
     [
-        # ── Qwen3-VL 系列 (openrouter_provider: alibaba) ──
-        '--mode direct --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alibaba',
-        '--mode comt_vsp --model "qwen/qwen3-vl-8b-instruct" --openrouter_provider alibaba --comt_sample_id "deletion-0107"',
-        '--mode direct --model "qwen/qwen3-vl-32b-instruct" --openrouter_provider alibaba',
-        '--mode comt_vsp --model "qwen/qwen3-vl-32b-instruct" --openrouter_provider alibaba --comt_sample_id "deletion-0107"',
-        '--mode direct --model "qwen/qwen3-vl-235b-a22b-instruct" --openrouter_provider alibaba',
-        '--mode comt_vsp --model "qwen/qwen3-vl-235b-a22b-instruct" --openrouter_provider alibaba --comt_sample_id "deletion-0107"',
-
-        # ── Gemma 3 系列 (openrouter_provider: deepinfra) ──
-        '--mode direct --model "google/gemma-3-12b-it" --openrouter_provider deepinfra',
-        '--mode comt_vsp --model "google/gemma-3-12b-it" --openrouter_provider deepinfra --comt_sample_id "deletion-0107"',
-        '--mode direct --model "google/gemma-3-27b-it" --openrouter_provider deepinfra',
-        '--mode comt_vsp --model "google/gemma-3-27b-it" --openrouter_provider deepinfra --comt_sample_id "deletion-0107"',
-
-        # ── Llama 4 系列 (openrouter_provider: deepinfra) ──
-        '--mode direct --model "meta-llama/llama-4-scout" --openrouter_provider deepinfra',
-        '--mode comt_vsp --model "meta-llama/llama-4-scout" --openrouter_provider deepinfra --comt_sample_id "deletion-0107"',
-        '--mode direct --model "meta-llama/llama-4-maverick" --openrouter_provider deepinfra',
-        '--mode comt_vsp --model "meta-llama/llama-4-maverick" --openrouter_provider deepinfra --comt_sample_id "deletion-0107"',
-
-        # ── Pixtral / Mistral 系列 (openrouter_provider: mistral) ──
-        '--mode direct --model "mistralai/pixtral-large-2411" --openrouter_provider mistral',
-        '--mode comt_vsp --model "mistralai/pixtral-large-2411" --openrouter_provider mistral --comt_sample_id "deletion-0107"',
+        '--profile autodl_qwen',
+        '--profile autodl_comt_vsp',
+        '--profile autodl_comt_vsp --vsp_override_images_dir /Users/yuantian/code/RedLens/data/override_3HappenWomen',
+        '--profile autodl_comt_vsp --vsp_override_images_dir /Users/yuantian/code/RedLens/data/override_crushedCar',
+        '--profile autodl_comt_vsp --vsp_override_images_dir /Users/yuantian/code/RedLens/data/override_black',
+        '--profile autodl_comt_vsp --vsp_override_images_dir /Users/yuantian/code/RedLens/data/override_white',
+        '--profile autodl_comt_vsp --vsp_override_images_dir /Users/yuantian/code/RedLens/data/override_noise',
     ],
 ]
 
@@ -519,43 +504,32 @@ def run_request(args_str: str, run_index: int, total_runs: int) -> RunResult:
         )
 
 
-def move_job_to_batch(result: RunResult, batch_folder: str) -> RunResult:
+def link_job_to_batch(result: RunResult, batch_folder: str) -> RunResult:
     """
-    将 job 文件夹移动到 batch 文件夹中，并更新 result 中的路径
-    
+    在 batch 文件夹中创建指向 job 文件夹的符号链接。
+    job 文件夹保留在 output/ 原位，batch 目录下只放 symlink。
+
     Args:
         result: 运行结果
         batch_folder: batch 文件夹路径
-        
+
     Returns:
-        更新后的 RunResult
+        RunResult（路径不变，仍指向 output/job_xxx/）
     """
     if not result.job_folder or not os.path.exists(result.job_folder):
         return result
-    
+
     job_basename = os.path.basename(result.job_folder)
-    new_job_folder = os.path.join(batch_folder, job_basename)
-    
+    link_path = os.path.join(batch_folder, job_basename)
+
     try:
-        shutil.move(result.job_folder, new_job_folder)
-        print(f"📦 已移动 job 文件夹: {result.job_folder} -> {new_job_folder}")
-        
-        # 更新所有路径
-        old_folder = result.job_folder
-        result.job_folder = new_job_folder
-        
-        if result.output_file:
-            result.output_file = result.output_file.replace(old_folder, new_job_folder)
-        if result.eval_file:
-            result.eval_file = result.eval_file.replace(old_folder, new_job_folder)
-        if result.vsp_dir:
-            result.vsp_dir = result.vsp_dir.replace(old_folder, new_job_folder)
-        if result.summary_file:
-            result.summary_file = result.summary_file.replace(old_folder, new_job_folder)
-            
+        # 使用绝对路径创建符号链接
+        abs_job_folder = os.path.abspath(result.job_folder)
+        os.symlink(abs_job_folder, link_path)
+        print(f"🔗 已创建符号链接: {link_path} -> {result.job_folder}")
     except Exception as e:
-        print(f"⚠️  移动 job 文件夹失败: {e}")
-    
+        print(f"⚠️  创建符号链接失败: {e}")
+
     return result
 
 
@@ -1473,7 +1447,7 @@ def main():
             save_batch_state(batch_folder, batch_num, run_states, created_at)
 
             result = run_request(args_str, i, total_runs)
-            result = move_job_to_batch(result, batch_folder)
+            result = link_job_to_batch(result, batch_folder)
             results.append(result)
 
             # 更新状态
