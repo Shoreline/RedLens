@@ -277,6 +277,23 @@ def scan_refusal_dir(dirpath: Path, persisted: bool) -> Optional[dict]:
     return info
 
 
+def _load_job_config(job_dir_name: str) -> Optional[dict]:
+    """尝试从 output/ 或 output_persisted/ 加载 job 的 run_config.json。"""
+    for base in (OUTPUT_DIR, PERSISTED_DIR):
+        cfg_path = base / job_dir_name / "run_config.json"
+        if cfg_path.exists():
+            return read_json(cfg_path)
+    return None
+
+
+def _find_job_path(job_dir_name: str) -> Optional[str]:
+    """返回 job 目录的相对路由前缀（output 或 output_persisted）。"""
+    for base, prefix in ((OUTPUT_DIR, "output"), (PERSISTED_DIR, "output_persisted")):
+        if (base / job_dir_name).is_dir():
+            return prefix
+    return None
+
+
 def scan_hs_comp(dirpath: Path, persisted: bool) -> Optional[dict]:
     info: Dict[str, Any] = {
         "type": "hs_comp",
@@ -296,7 +313,22 @@ def scan_hs_comp(dirpath: Path, persisted: bool) -> Optional[dict]:
         info["job1_num"] = j1.get("num")
         info["job2_num"] = j2.get("num")
         info["job1_sub"] = j1.get("sub_task", "")
+        info["job1_turn"] = j1.get("turn", "")
+        info["job1_dir"] = j1.get("dir", "")
         info["job2_sub"] = j2.get("sub_task", "")
+        info["job2_turn"] = j2.get("turn", "")
+        info["job2_dir"] = j2.get("dir", "")
+
+        # 加载 job configs
+        for side in ("job1", "job2"):
+            dir_name = info.get(f"{side}_dir", "")
+            cfg = _load_job_config(dir_name) if dir_name else None
+            route_prefix = _find_job_path(dir_name) if dir_name else None
+            if cfg:
+                info[f"{side}_config"] = cfg
+            if route_prefix:
+                info[f"{side}_route"] = route_prefix
+
         results = summary.get("results", {})
         all_cos = []
         for cat_data in results.values():
@@ -374,6 +406,7 @@ class ProcessManager:
             "id": pid,
             "type": proc_type,
             "label": label,
+            "cmd": cmd,
             "process": proc,
             "output_lines": [],
             "started_at": time.time(),
@@ -399,31 +432,31 @@ class ProcessManager:
     def _is_running(self, entry: dict) -> bool:
         return entry["process"].poll() is None
 
-    def status_all(self) -> List[dict]:
-        result = []
-        for pid, entry in self._processes.items():
-            running = self._is_running(entry)
-            rc = entry["process"].returncode if not running else None
-            result.append({
-                "id": pid,
-                "type": entry["type"],
-                "label": entry["label"],
-                "running": running,
-                "return_code": rc,
-                "started_at": entry["started_at"],
-                "elapsed": round(time.time() - entry["started_at"], 1),
-                "output_tail": entry["output_lines"][-80:],
-            })
-        return result
+    @staticmethod
+    def _extract_result_link(entry: dict) -> Optional[str]:
+        """从进程输出中提取结果目录，返回可点击的链接路径。"""
+        import re
+        # 匹配 "输出目录: xxx" 模式（所有脚本共用）
+        for line in reversed(entry["output_lines"]):
+            m = re.search(r"输出目录:\s*(\S+)", line)
+            if m:
+                dirname = m.group(1)
+                # 根据目录名选择最佳结果页面
+                base = OUTPUT_DIR / dirname
+                for candidate in ("report.html", "summary.html", "hs_diff_summary.png"):
+                    if (base / candidate).exists():
+                        return f"/output/{dirname}/{candidate}"
+                # 目录存在但无已知结果文件，链接到目录本身
+                if base.is_dir():
+                    return f"/output/{dirname}/"
+                return None
+        return None
 
-    def status_one(self, pid: str) -> Optional[dict]:
-        entry = self._processes.get(pid)
-        if not entry:
-            return None
+    def _entry_to_dict(self, entry: dict) -> dict:
         running = self._is_running(entry)
         rc = entry["process"].returncode if not running else None
-        return {
-            "id": pid,
+        d = {
+            "id": entry["id"],
             "type": entry["type"],
             "label": entry["label"],
             "running": running,
@@ -432,6 +465,18 @@ class ProcessManager:
             "elapsed": round(time.time() - entry["started_at"], 1),
             "output_tail": entry["output_lines"][-80:],
         }
+        if not running and rc == 0:
+            d["result_link"] = self._extract_result_link(entry)
+        return d
+
+    def status_all(self) -> List[dict]:
+        return [self._entry_to_dict(e) for e in self._processes.values()]
+
+    def status_one(self, pid: str) -> Optional[dict]:
+        entry = self._processes.get(pid)
+        if not entry:
+            return None
+        return self._entry_to_dict(entry)
 
     def clear_finished(self):
         to_del = [pid for pid, e in self._processes.items() if not self._is_running(e)]
@@ -904,6 +949,9 @@ DASHBOARD_HTML = (
     '.nav-tab:hover:not(.active) { background: #e8eaed; }\n'
     # Toolbar
     '.toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 24px; background: #fff; border-bottom: 1px solid #e1e4e8; flex-wrap: wrap; }\n'
+    '.rd-eval-tab { border: 1px solid #ddd; background: #fff; font-size: 11px; padding: 4px 10px; cursor: pointer; transition: all 0.15s; }\n'
+    '.rd-eval-tab:hover { background: #f0f2f5; }\n'
+    '.rd-eval-tab.active { background: #0984e3; color: #fff; border-color: #0984e3; }\n'
     '.filter-btn { padding: 5px 12px; border-radius: 20px; border: 1px solid #ddd; background: #fff; cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.15s; }\n'
     '.filter-btn:hover { background: #f0f2f5; }\n'
     '.filter-btn.active { background: #0984e3; color: #fff; border-color: #0984e3; }\n'
@@ -1128,8 +1176,8 @@ DASHBOARD_HTML = (
     '        <div class="form-grid" style="grid-template-columns:1fr 1fr">\n'
     '          <div class="form-group"><label>Job 1</label><input type="number" id="ql-hs-job1" placeholder="e.g. 243"></div>\n'
     '          <div class="form-group"><label>Job 2</label><input type="number" id="ql-hs-job2" placeholder="e.g. 245"></div>\n'
-    '          <div class="form-group"><label>Sub Task</label><input type="text" id="ql-hs-sub" value="q1"></div>\n'
-    '          <div class="form-group"><label>Turn</label><input type="text" id="ql-hs-turn" value="t0"></div>\n'
+    '          <div class="form-group"><label>Job 1 q/t</label><input type="text" id="ql-hs-sub1" value="q1" style="width:45%;display:inline" placeholder="q"><input type="text" id="ql-hs-turn1" value="t0" style="width:45%;display:inline;margin-left:5%" placeholder="t"></div>\n'
+    '          <div class="form-group"><label>Job 2 q/t</label><input type="text" id="ql-hs-sub2" value="q1" style="width:45%;display:inline" placeholder="q"><input type="text" id="ql-hs-turn2" value="t0" style="width:45%;display:inline;margin-left:5%" placeholder="t"></div>\n'
     '        </div>\n'
     '        <div class="form-actions"><button class="btn btn-primary btn-sm" onclick="launchHsComp()">Launch HS Comp</button></div>\n'
     '      </div>\n'
@@ -1137,12 +1185,34 @@ DASHBOARD_HTML = (
     '      <div style="flex:1;min-width:280px">\n'
     '        <h4 style="font-size:13px;margin-bottom:8px">Refusal Direction</h4>\n'
     '        <div class="form-grid" style="grid-template-columns:1fr 1fr">\n'
-    '          <div class="form-group"><label>Job Numbers (space-sep)</label><input type="text" id="ql-rd-jobs" placeholder="e.g. 243 245"></div>\n'
-    '          <div class="form-group"><label>Batch Numbers (space-sep)</label><input type="text" id="ql-rd-batch" placeholder="e.g. 17"></div>\n'
+    '          <div class="form-group"><label>Train Jobs (space-sep)</label><input type="text" id="ql-rd-jobs" placeholder="e.g. 243 245"></div>\n'
+    '          <div class="form-group"><label>Train Batches (space-sep)</label><input type="text" id="ql-rd-batch" placeholder="e.g. 17"></div>\n'
     '          <div class="form-group"><label>Sub Task</label><input type="text" id="ql-rd-sub" value="q0"></div>\n'
     '          <div class="form-group"><label>Turn</label><input type="text" id="ql-rd-turn" value="t0"></div>\n'
     '          <div class="form-group"><label>Score Method</label><select id="ql-rd-score"><option value="dot">dot</option><option value="cosine">cosine</option></select></div>\n'
-    '          <div class="form-group"><label>K-fold</label><input type="number" id="ql-rd-folds" placeholder=""></div>\n'
+    '          <div class="form-group" style="visibility:hidden"></div>\n'
+    '        </div>\n'
+    # Eval mode selector
+    '        <div style="margin:8px 0 4px"><label style="font-size:12px;font-weight:600;color:#2d3436">Eval Mode</label></div>\n'
+    '        <div id="ql-rd-eval-tabs" style="display:flex;gap:0;margin-bottom:8px">\n'
+    '          <button class="btn btn-sm rd-eval-tab active" data-mode="split" onclick="setRdEvalMode(\'split\')" style="border-radius:6px 0 0 6px">Random Split</button>\n'
+    '          <button class="btn btn-sm rd-eval-tab" data-mode="kfold" onclick="setRdEvalMode(\'kfold\')" style="border-radius:0">K-fold CV</button>\n'
+    '          <button class="btn btn-sm rd-eval-tab" data-mode="cross" onclick="setRdEvalMode(\'cross\')" style="border-radius:0 6px 6px 0">Cross-Job Test</button>\n'
+    '        </div>\n'
+    # Split mode fields
+    '        <div id="ql-rd-mode-split" class="form-grid" style="grid-template-columns:1fr 1fr">\n'
+    '          <div class="form-group"><label>Split Ratio</label><input type="number" id="ql-rd-split" value="0.7" step="0.1" min="0.1" max="0.9"></div>\n'
+    '          <div class="form-group"><label>Seed</label><input type="number" id="ql-rd-seed-split" value="42"></div>\n'
+    '        </div>\n'
+    # K-fold mode fields
+    '        <div id="ql-rd-mode-kfold" class="form-grid" style="grid-template-columns:1fr 1fr;display:none">\n'
+    '          <div class="form-group"><label>K-fold</label><input type="number" id="ql-rd-folds" value="5" min="2"></div>\n'
+    '          <div class="form-group"><label>Seed</label><input type="number" id="ql-rd-seed-kfold" value="42"></div>\n'
+    '        </div>\n'
+    # Cross-job mode fields
+    '        <div id="ql-rd-mode-cross" class="form-grid" style="grid-template-columns:1fr 1fr;display:none">\n'
+    '          <div class="form-group"><label>Test Jobs (space-sep)</label><input type="text" id="ql-rd-test-jobs" placeholder="e.g. 250 251"></div>\n'
+    '          <div class="form-group"><label>Test Batches (space-sep)</label><input type="text" id="ql-rd-test-batch" placeholder="e.g. 18"></div>\n'
     '        </div>\n'
     '        <div class="form-actions"><button class="btn btn-primary btn-sm" onclick="launchRefusalDir()">Launch Refusal Dir</button></div>\n'
     '      </div>\n'
@@ -1317,7 +1387,10 @@ DASHBOARD_HTML = (
     '        if (item.sub_task) metrics += m("Sub", item.sub_task+"/"+(item.turn||""));\n'
     '    } else if (item.type === "hs_comp") {\n'
     '        title = esc("HS Comp " + (item.comp_num || "?"));\n'
-    '        if (item.job1_num && item.job2_num) metrics += m("Jobs", item.job1_num+" vs "+item.job2_num);\n'
+    '        if (item.job1_num && item.job2_num) {\n'
+    '            let jobsLabel = item.job1_num + (item.job1_sub ? " ("+item.job1_sub+"/"+item.job1_turn+")" : "") + " vs " + item.job2_num + (item.job2_sub ? " ("+item.job2_sub+"/"+item.job2_turn+")" : "");\n'
+    '            metrics += m("Jobs", jobsLabel);\n'
+    '        }\n'
     '        metrics += m("Matched", item.matched_tasks);\n'
     '        if (item.mean_cosine != null) metrics += m("Cos Sim", item.mean_cosine.toFixed(4), "s");\n'
     '    } else { title = esc(title); }\n'
@@ -1607,7 +1680,48 @@ DASHBOARD_HTML = (
     '}\n'
     '\n'
 
-    # HS Comp detail
+    # HS Comp detail — helper to render one job's info card
+    'function _hsJobCard(item, side) {\n'
+    '    const num = item[side+"_num"];\n'
+    '    const sub = item[side+"_sub"] || "?";\n'
+    '    const turn = item[side+"_turn"] || "?";\n'
+    '    const dir = item[side+"_dir"] || "";\n'
+    '    const cfg = item[side+"_config"] || {};\n'
+    '    const route = item[side+"_route"];\n'
+    '    const label = side === "job1" ? "Job 1" : "Job 2";\n'
+    '    let h = "<div style=\\"flex:1;min-width:260px;border:1px solid #e1e4e8;border-radius:8px;padding:12px\\">";\n'
+    '    h += "<div style=\\"display:flex;align-items:center;justify-content:space-between;margin-bottom:8px\\">";\n'
+    '    h += "<strong style=\\"font-size:14px\\">" + label + " — #" + (num||"?") + "</strong>";\n'
+    '    if (route && dir) h += ` <a href="/${route}/${dir}/summary.html" target="_blank" class="btn btn-sm" style="font-size:11px">Open Job</a>`;\n'
+    '    h += "</div>";\n'
+    '    h += "<table class=\\"data-table\\" style=\\"font-size:12px\\">";\n'
+    '    h += "<tr><td style=\\"width:110px\\">q / t</td><td>" + esc(sub) + " / " + esc(turn) + "</td></tr>";\n'
+    '    h += "<tr><td>Mode</td><td>" + esc(cfg.mode||"—") + "</td></tr>";\n'
+    '    h += "<tr><td>Provider</td><td>" + esc(cfg.provider||"—") + "</td></tr>";\n'
+    '    h += "<tr><td>Model</td><td>" + esc(cfg.model||"—") + "</td></tr>";\n'
+    '    if (cfg.vsp_override_images_dir) h += "<tr><td>Override</td><td style=\\"word-break:break-all\\">" + esc(cfg.vsp_override_images_dir) + "</td></tr>";\n'
+    '    h += "</table>";\n'
+    # More Details collapsible
+    '    const detailId = side + "_details_" + (item.comp_num||0);\n'
+    '    h += "<details style=\\"margin-top:6px\\"><summary style=\\"cursor:pointer;font-size:12px;color:#586069\\">More Details</summary>";\n'
+    '    h += "<table class=\\"data-table\\" style=\\"font-size:11px;margin-top:4px\\">";\n'
+    '    if (cfg.profile) h += "<tr><td>Profile</td><td>" + esc(cfg.profile) + "</td></tr>";\n'
+    '    if (cfg.temperature != null) h += "<tr><td>Temperature</td><td>" + cfg.temperature + "</td></tr>";\n'
+    '    if (cfg.llm_base_url) h += "<tr><td>LLM URL</td><td style=\\"word-break:break-all\\">" + esc(cfg.llm_base_url) + "</td></tr>";\n'
+    '    if (cfg.comt_sample_id) h += "<tr><td>CoMT Sample</td><td>" + esc(cfg.comt_sample_id) + "</td></tr>";\n'
+    '    if (cfg.sampling_rate) h += "<tr><td>Sampling Rate</td><td>" + cfg.sampling_rate + "</td></tr>";\n'
+    '    if (cfg.tunnel) h += "<tr><td>Tunnel</td><td>" + esc(cfg.tunnel) + "</td></tr>";\n'
+    '    if (cfg.image_types) h += "<tr><td>Image Types</td><td>" + esc(cfg.image_types.join(", ")) + "</td></tr>";\n'
+    '    if (cfg.max_tokens) h += "<tr><td>Max Tokens</td><td>" + cfg.max_tokens + "</td></tr>";\n'
+    '    if (cfg.openrouter_provider) h += "<tr><td>OR Provider</td><td>" + esc(cfg.openrouter_provider) + "</td></tr>";\n'
+    '    h += "<tr><td>Dir</td><td style=\\"word-break:break-all;font-size:10px\\">" + esc(dir) + "</td></tr>";\n'
+    '    h += "</table></details>";\n'
+    '    h += "</div>";\n'
+    '    return h;\n'
+    '}\n'
+    '\n'
+
+    # HS Comp detail — main function
     'function showHsCompDetail(path) {\n'
     '    const item = allItems.find(i => i.path === path);\n'
     '    if (!item) return;\n'
@@ -1618,17 +1732,17 @@ DASHBOARD_HTML = (
     '    html += "<div style=\\"margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap\\">";\n'
     '    if (item.has_summary_png) {\n'
     '        html += `<a href="/${rel}/${item.name}/hs_diff_summary.png" target="_blank" class="btn btn-sm">Summary PNG</a>`;\n'
-    '        html += `<a href="/${rel}/${item.name}/hs_diff_cosine_boxplot.png" target="_blank" class="btn btn-sm">Cosine Boxplot</a>`;\n'
-    '        html += `<a href="/${rel}/${item.name}/hs_diff_alignment_bar.png" target="_blank" class="btn btn-sm">Alignment Bar</a>`;\n'
     '    }\n'
     '    html += "</div>";\n'
-    # Metrics
+    # Job info cards side by side
+    '    html += "<div style=\\"display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px\\">";\n'
+    '    html += _hsJobCard(item, "job1");\n'
+    '    html += _hsJobCard(item, "job2");\n'
+    '    html += "</div>";\n'
+    # Comparison metrics
     '    html += "<table class=\\"data-table\\"><tr><th>Metric</th><th>Value</th></tr>";\n'
-    '    if (item.job1_num && item.job2_num) html += "<tr><td>Jobs</td><td>" + item.job1_num + " vs " + item.job2_num + "</td></tr>";\n'
     '    html += "<tr><td>Matched Tasks</td><td>" + (item.matched_tasks||0) + "</td></tr>";\n'
     '    if (item.mean_cosine != null) html += "<tr><td>Mean Cosine Sim</td><td>" + item.mean_cosine.toFixed(4) + "</td></tr>";\n'
-    '    if (item.job1_sub) html += "<tr><td>Job1 Sub Task</td><td>" + esc(item.job1_sub) + "</td></tr>";\n'
-    '    if (item.job2_sub) html += "<tr><td>Job2 Sub Task</td><td>" + esc(item.job2_sub) + "</td></tr>";\n'
     '    if (item.timestamp) html += "<tr><td>Timestamp</td><td>" + esc(item.timestamp) + "</td></tr>";\n'
     '    html += "</table>";\n'
     # Inline image
@@ -1705,7 +1819,7 @@ DASHBOARD_HTML = (
     '    if (document.getElementById("lj-skip_eval").value === "1") overrides.skip_eval = true;\n'
     '\n'
     '    apiPost("/api/launch_job", { profile, overrides }).then(d => {\n'
-    '        if (d && d.ok) { alert("Job launched! Process: " + d.process_id + "\\nCmd: " + d.cmd); startProcPolling(); }\n'
+    '        if (d && d.ok) startProcPolling();\n'
     '    });\n'
     '}\n'
     '\n'
@@ -1714,12 +1828,23 @@ DASHBOARD_HTML = (
     '    const job2 = parseInt(document.getElementById("ql-hs-job2").value);\n'
     '    if (!job1 || !job2) { alert("Enter both job numbers"); return; }\n'
     '    const body = { job1, job2,\n'
-    '        sub_task: document.getElementById("ql-hs-sub").value || "q1",\n'
-    '        turn: document.getElementById("ql-hs-turn").value || "t0"\n'
+    '        sub_task1: document.getElementById("ql-hs-sub1").value || "q1",\n'
+    '        turn1: document.getElementById("ql-hs-turn1").value || "t0",\n'
+    '        sub_task2: document.getElementById("ql-hs-sub2").value || "q1",\n'
+    '        turn2: document.getElementById("ql-hs-turn2").value || "t0"\n'
     '    };\n'
     '    apiPost("/api/launch_hs_comp", body).then(d => {\n'
-    '        if (d && d.ok) { alert("HS Comp launched!\\n" + d.cmd); startProcPolling(); }\n'
+    '        if (d && d.ok) startProcPolling();\n'
     '    });\n'
+    '}\n'
+    '\n'
+    'let rdEvalMode = "split";\n'
+    'function setRdEvalMode(mode) {\n'
+    '    rdEvalMode = mode;\n'
+    '    document.querySelectorAll(".rd-eval-tab").forEach(b => b.classList.toggle("active", b.dataset.mode === mode));\n'
+    '    document.getElementById("ql-rd-mode-split").style.display = mode === "split" ? "" : "none";\n'
+    '    document.getElementById("ql-rd-mode-kfold").style.display = mode === "kfold" ? "" : "none";\n'
+    '    document.getElementById("ql-rd-mode-cross").style.display = mode === "cross" ? "" : "none";\n'
     '}\n'
     '\n'
     'function launchRefusalDir() {\n'
@@ -1727,16 +1852,34 @@ DASHBOARD_HTML = (
     '    const batchStr = document.getElementById("ql-rd-batch").value.trim();\n'
     '    const job_nums = jobsStr ? jobsStr.split(/\\s+/).map(Number).filter(n => !isNaN(n)) : [];\n'
     '    const batch = batchStr ? batchStr.split(/\\s+/).map(Number).filter(n => !isNaN(n)) : [];\n'
-    '    if (!job_nums.length && !batch.length) { alert("Enter job or batch numbers"); return; }\n'
+    '    if (!job_nums.length && !batch.length) { alert("Enter train job or batch numbers"); return; }\n'
     '    const body = { job_nums, batch,\n'
     '        sub_task: document.getElementById("ql-rd-sub").value || "q0",\n'
     '        turn: document.getElementById("ql-rd-turn").value || "t0",\n'
     '        score_method: document.getElementById("ql-rd-score").value\n'
     '    };\n'
-    '    const folds = parseInt(document.getElementById("ql-rd-folds").value);\n'
-    '    if (folds > 0) body.n_folds = folds;\n'
+    '    if (rdEvalMode === "cross") {\n'
+    '        const tj = document.getElementById("ql-rd-test-jobs").value.trim();\n'
+    '        const tb = document.getElementById("ql-rd-test-batch").value.trim();\n'
+    '        const test_job = tj ? tj.split(/\\s+/).map(Number).filter(n => !isNaN(n)) : [];\n'
+    '        const test_batch = tb ? tb.split(/\\s+/).map(Number).filter(n => !isNaN(n)) : [];\n'
+    '        if (!test_job.length && !test_batch.length) { alert("Cross-Job mode: enter test job or batch numbers"); return; }\n'
+    '        if (test_job.length) body.test_job = test_job;\n'
+    '        if (test_batch.length) body.test_batch = test_batch;\n'
+    '    } else if (rdEvalMode === "kfold") {\n'
+    '        const folds = parseInt(document.getElementById("ql-rd-folds").value);\n'
+    '        if (!folds || folds < 2) { alert("K-fold requires >= 2"); return; }\n'
+    '        body.n_folds = folds;\n'
+    '        const seed = parseInt(document.getElementById("ql-rd-seed-kfold").value);\n'
+    '        if (!isNaN(seed)) body.seed = seed;\n'
+    '    } else {\n'
+    '        const splitRatio = parseFloat(document.getElementById("ql-rd-split").value);\n'
+    '        if (splitRatio > 0 && splitRatio < 1) body.split_ratio = splitRatio;\n'
+    '        const seed = parseInt(document.getElementById("ql-rd-seed-split").value);\n'
+    '        if (!isNaN(seed)) body.seed = seed;\n'
+    '    }\n'
     '    apiPost("/api/launch_refusal_dir", body).then(d => {\n'
-    '        if (d && d.ok) { alert("Refusal Dir launched!\\n" + d.cmd); startProcPolling(); }\n'
+    '        if (d && d.ok) startProcPolling();\n'
     '    });\n'
     '}\n'
     '\n'
@@ -1745,7 +1888,7 @@ DASHBOARD_HTML = (
     '    const body = {};\n'
     '    if (resume) body.resume = parseInt(resume);\n'
     '    apiPost("/api/launch_batch", body).then(d => {\n'
-    '        if (d && d.ok) { alert("Batch launched!\\n" + d.cmd); startProcPolling(); }\n'
+    '        if (d && d.ok) startProcPolling();\n'
     '    });\n'
     '}\n'
     '\n'
@@ -1789,7 +1932,9 @@ DASHBOARD_HTML = (
     '            html += `<div class="proc-item" style="cursor:pointer" onclick="toggleProcLog(\'${p.id}\')">`;\n'
     '            html += `<span class="proc-status ${sc}"></span>`;\n'
     '            html += `<span class="proc-label"><b>${esc(p.type)}</b>: ${esc(p.label)} (${elapsed})</span>`;\n'
-    '            html += `<span style="font-size:11px;color:#636e72">${sl}</span>`;\n'
+    '            let statusHtml = `<span style="font-size:11px;color:#636e72">${sl}</span>`;\n'
+    '            if (p.result_link) statusHtml += ` <a href="${p.result_link}" target="_blank" onclick="event.stopPropagation()" style="font-size:11px;margin-left:6px">View Result</a>`;\n'
+    '            html += statusHtml;\n'
     '            html += "</div>";\n'
     '            html += `<div class="proc-log${expanded ? " visible" : ""}" id="proc-log-${p.id}">`;\n'
     '            html += esc((p.output_tail||[]).join("\\n"));\n'

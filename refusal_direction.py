@@ -222,6 +222,14 @@ def load_meta(job_dir: Path) -> dict:
     return {}
 
 
+def load_run_config(job_dir: Path) -> dict:
+    """加载 run_config.json。"""
+    cfg_path = job_dir / "run_config.json"
+    if cfg_path.exists():
+        return json.loads(cfg_path.read_text(encoding="utf-8"))
+    return {}
+
+
 def pair_data(labels: dict, hidden_states: dict) -> list:
     """内连接标签和 hidden states。
 
@@ -688,21 +696,7 @@ def generate_report_html(summary: dict, out_dir: Path):
         data = base64.b64encode(path.read_bytes()).decode()
         return f'<img src="data:image/png;base64,{data}" style="width:100%; border-radius:8px;">'
 
-    # 训练 job 列表
-    train_list = "".join(
-        f'<li>{j.get("dir", "?")} <span style="color:#888">({j.get("model", "?")})</span></li>'
-        for j in train_jobs
-    )
-
-    # 测试 job 列表
-    test_html = ""
-    if test_jobs:
-        test_list = "".join(f'<li>{j.get("dir", "?")}</li>' for j in test_jobs)
-        test_html = f"""
-        <div class="info-block">
-            <h3>Test Jobs</h3>
-            <ul>{test_list}</ul>
-        </div>"""
+    has_test = test_jobs is not None and len(test_jobs) > 0
 
     # CV 信息
     cv_html = ""
@@ -717,6 +711,96 @@ def generate_report_html(summary: dict, out_dir: Path):
             <h3>&plusmn;{cv['std_auc']:.4f}</h3>
             <p>Std AUC</p>
         </div>"""
+
+    # ---------- 构建 job 配置对比表格 ----------
+    def _build_job_config_html(train_jobs, test_jobs):
+        """生成每个 job 的详细参数表格，高亮不同的参数。"""
+        all_jobs = []
+        for j in train_jobs:
+            all_jobs.append(("Train", j))
+        if test_jobs:
+            for j in test_jobs:
+                all_jobs.append(("Test", j))
+
+        # 收集所有 run_config 键
+        all_configs = [j.get("run_config", {}) for _, j in all_jobs]
+        if not any(all_configs):
+            # 没有 run_config，回退到简单列表
+            train_list = "".join(
+                f'<li>{j.get("dir", "?")} <span style="color:#888">({j.get("model", "?")})</span></li>'
+                for j in train_jobs
+            )
+            html = f'<div class="info-block"><h3>Train Jobs</h3><ul>{train_list}</ul></div>'
+            if test_jobs:
+                test_list = "".join(f'<li>{j.get("dir", "?")}</li>' for j in test_jobs)
+                html += f'<div class="info-block"><h3>Test Jobs</h3><ul>{test_list}</ul></div>'
+            return html
+
+        # 找出所有键（保持有意义的顺序）
+        key_order = ["profile", "mode", "provider", "model", "temperature", "top_p",
+                      "max_tokens", "seed", "consumers", "comt_sample_id", "image_types",
+                      "categories", "sampling_rate", "sampling_seed", "llm_base_url",
+                      "openrouter_provider", "eval_model", "eval_concurrency",
+                      "vsp_postproc", "vsp_postproc_backend", "vsp_postproc_method",
+                      "vsp_postproc_fallback", "vsp_override_images_dir", "tunnel", "max_tasks"]
+        all_keys_set = set()
+        for cfg in all_configs:
+            all_keys_set.update(cfg.keys())
+        # 按预定义顺序排列，剩余的追加
+        keys = [k for k in key_order if k in all_keys_set]
+        keys += sorted(all_keys_set - set(key_order))
+
+        # 过滤掉路径类参数（太长且不影响结果）
+        skip_keys = {"json_glob", "image_base", "llm_base_url"}
+        keys = [k for k in keys if k not in skip_keys]
+
+        # 找出值不同的键
+        diff_keys = set()
+        for k in keys:
+            vals = [str(cfg.get(k, "—")) for cfg in all_configs]
+            if len(set(vals)) > 1:
+                diff_keys.add(k)
+
+        # 如果只有一个 job，不需要高亮
+        if len(all_jobs) == 1:
+            diff_keys = set()
+
+        # 生成表头
+        headers = "".join(
+            f'<th><span style="color:{"#2ECC71" if role == "Train" else "#F39C12"}">{role}</span><br>'
+            f'<span style="font-size:0.75em;color:#888">{j.get("dir", "?")}</span></th>'
+            for role, j in all_jobs
+        )
+
+        # 生成行
+        rows = ""
+        for k in keys:
+            is_diff = k in diff_keys
+            row_style = ' style="background:rgba(255,215,61,0.08);"' if is_diff else ''
+            cells = ""
+            for _, j in all_jobs:
+                val = j.get("run_config", {}).get(k, "—")
+                if val is None:
+                    val = "—"
+                elif isinstance(val, list):
+                    val = ", ".join(str(v) for v in val)
+                val_str = str(val)
+                # 截断过长的值
+                if len(val_str) > 60:
+                    val_str = val_str[:57] + "..."
+                cell_style = ' style="color:#ffd93d;font-weight:bold;"' if is_diff else ''
+                cells += f"<td{cell_style}>{val_str}</td>"
+
+            key_style = ' style="color:#ffd93d;"' if is_diff else ''
+            rows += f"<tr{row_style}><td{key_style}>{k}</td>{cells}</tr>"
+
+        return f"""
+        <table class="config-table">
+            <thead><tr><th>Parameter</th>{headers}</tr></thead>
+            <tbody>{rows}</tbody>
+        </table>"""
+
+    config_html = _build_job_config_html(train_jobs, test_jobs or [])
 
     # PCA 信息
     pca_html = ""
@@ -779,6 +863,9 @@ def generate_report_html(summary: dict, out_dir: Path):
         th {{ text-align: left; color: #00d9ff; padding: 8px 12px; border-bottom: 2px solid rgba(0, 217, 255, 0.3); font-size: 0.9em; }}
         td {{ padding: 6px 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); font-size: 0.9em; }}
         tr:hover td {{ background: rgba(255, 255, 255, 0.03); }}
+        .config-table {{ font-size: 0.85em; }}
+        .config-table th {{ white-space: nowrap; }}
+        .config-table td:first-child {{ color: #aaa; white-space: nowrap; }}
     </style>
 </head>
 <body>
@@ -787,7 +874,7 @@ def generate_report_html(summary: dict, out_dir: Path):
     <p class="subtitle">{summary.get('timestamp', '')}</p>
 
     <div class="section">
-        <h2>Overview</h2>
+        <h2>Overview{' <span style="font-size:0.6em;color:#888;font-weight:normal">— evaluated on test set</span>' if has_test else ''}</h2>
         <div class="stats">
             <div class="stat-card auc">
                 <h3>{f'{auc:.4f}' if auc is not None else 'N/A'}</h3>
@@ -815,14 +902,9 @@ def generate_report_html(summary: dict, out_dir: Path):
 
     <div class="section">
         <h2>Configuration</h2>
-        <div class="info-block">
-            <h3>Train Jobs</h3>
-            <ul>{train_list}</ul>
-        </div>
-        {test_html}
-        <div class="info-block">
-            <p>Sub-task: <strong>{params.get('sub_task', '?')}</strong> &nbsp; Turn: <strong>{params.get('turn', '?')}</strong> &nbsp; Score: <strong>{params.get('score_method', '?')}</strong> &nbsp; Layer: <strong>{params.get('layer', '?')}</strong></p>
-            <p>Split: <strong>{params.get('split_ratio', '?')}</strong> &nbsp; Seed: <strong>{params.get('seed', '?')}</strong>{f" &nbsp; Folds: <strong>{params.get('n_folds')}</strong>" if params.get('n_folds') else ''}</p>
+        {config_html}
+        <div class="info-block" style="margin-top:15px;">
+            <p>Sub-task: <strong>{params.get('sub_task', '?')}</strong> &nbsp; Turn: <strong>{params.get('turn', '?')}</strong> &nbsp; Score: <strong>{params.get('score_method', '?')}</strong> &nbsp; Layer: <strong>{params.get('layer', '?')}</strong>{f" &nbsp; Split: <strong>{params.get('split_ratio', '?')}</strong> &nbsp; Seed: <strong>{params.get('seed', '?')}</strong>" if not has_test else ''}{f" &nbsp; Folds: <strong>{params.get('n_folds')}</strong>" if params.get('n_folds') else ''}</p>
         </div>
         {pca_html}
     </div>
@@ -967,6 +1049,7 @@ def main():
     print(f"训练数据 ({len(train_dirs)} jobs):")
     print(f"  子任务: {args.sub_task}, 轮次: {args.turn}")
     samples, train_metas = load_multi_job(train_dirs, args.sub_task, args.turn)
+    train_configs = [load_run_config(d) for d in train_dirs]
 
     n_safe = sum(1 for s in samples if s["label"] == "safe")
     n_unsafe = len(samples) - n_safe
@@ -997,12 +1080,15 @@ def main():
     title_suffix = f"\n{model_name} | Train: {train_label}"
 
     cv_info = None
+    test_metas = []
+    test_configs = []
 
     # ---------- 分支：跨 job / K-fold / 单次 split ----------
     if has_test:
         # 跨 job 测试模式
         print(f"\n测试数据 ({len(test_dirs)} jobs):")
         test_samples, test_metas = load_multi_job(test_dirs, args.sub_task, args.turn)
+        test_configs = [load_run_config(d) for d in test_dirs]
         print(f"  合计: {len(test_samples)} 样本")
 
         if len(test_samples) == 0:
@@ -1095,13 +1181,32 @@ def main():
 
     # summary.json
     from datetime import datetime
+    # 评估数据统计（has_test 时用测试集，否则用训练集）
+    if has_test:
+        eval_n_safe = eval_result["overall"]["n_safe"]
+        eval_n_unsafe = eval_result["overall"]["n_unsafe"]
+        data_stats = {
+            "total": eval_n_safe + eval_n_unsafe,
+            "safe": eval_n_safe,
+            "unsafe": eval_n_unsafe,
+        }
+    else:
+        data_stats = {
+            "total": len(samples),
+            "safe": n_safe,
+            "unsafe": n_unsafe,
+        }
+
     summary = {
         "refdir_num": refdir_num,
         "timestamp": datetime.now().isoformat(),
-        "train_jobs": [{"dir": d.name, "model": m.get("model", "unknown")}
-                       for d, m in zip(train_dirs, train_metas)],
+        "train_jobs": [{"dir": d.name, "model": m.get("model", "unknown"),
+                         "run_config": c}
+                       for d, m, c in zip(train_dirs, train_metas, train_configs)],
         "train_batches": args.batch,
-        "test_jobs": [{"dir": d.name} for d in test_dirs] if has_test else None,
+        "test_jobs": [{"dir": d.name, "model": m.get("model", "unknown"),
+                        "run_config": c}
+                      for d, m, c in zip(test_dirs, test_metas, test_configs)] if has_test else None,
         "test_batches": args.test_batch,
         "params": {
             "sub_task": args.sub_task,
@@ -1112,11 +1217,7 @@ def main():
             "seed": args.seed,
             "layer": train_metas[0].get("layer", -1) if train_metas else -1,
         },
-        "data_stats": {
-            "total": len(samples),
-            "safe": n_safe,
-            "unsafe": n_unsafe,
-        },
+        "data_stats": data_stats,
         "overall": {k: v for k, v in eval_result["overall"].items() if k != "roc_curve"},
         "per_category": eval_result["per_category"],
     }

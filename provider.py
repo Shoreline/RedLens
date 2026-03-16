@@ -883,12 +883,13 @@ class ComtVspProvider(VSPProvider):
         task1_query += f"Task: Count the number of objects in image_1.\n"
         task1_query += f"Context: {original_question}\n\n"
 
-        # 使用固定选项（0, 5, 10, 15），不使用CoMT数据集的选项
+        # 使用固定选项，全覆盖 0-15+ 避免模型因计数不匹配选项而陷入思维循环
         task1_query += "Options:\n"
         task1_query += "  (A) 0\n"
-        task1_query += "  (B) 5\n"
-        task1_query += "  (C) 10\n"
-        task1_query += "  (D) 15\n\n"
+        task1_query += "  (B) 1-4\n"
+        task1_query += "  (C) 5-9\n"
+        task1_query += "  (D) 10-14\n"
+        task1_query += "  (E) 15+\n\n"
 
         task1_query += "REQUIRED STEPS:\n"
         task1_query += "1. Call detection() tool on image_1\n"

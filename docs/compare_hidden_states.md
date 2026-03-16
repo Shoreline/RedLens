@@ -27,7 +27,7 @@ write_summary(comp_dir)              # 保存 summary.json 到 output/hidden_sta
 Hidden state 文件命名格式：`{category}_{index}_{sub_task}_{turn}.npy`
 
 - 默认匹配 `sub_task=q1, turn=t0`
-- 支持两个 job 使用不同的 sub_task/turn（`--sub_task1/2`, `--turn1/2`）
+- 支持两个 job 分别指定不同的 sub_task/turn（`--sub_task1/2`, `--turn1/2`）
 - 只分析两个 job 中 `(category, index)` 交集部分
 
 ## 分析指标
@@ -42,7 +42,7 @@ Hidden state 文件命名格式：`{category}_{index}_{sub_task}_{turn}.npy`
 
 输出每个 category 的 mean/std/min/max。值越接近 1 说明偏移方向越一致。
 
-### 详细指标（`--detailed`）
+### 详细指标（`--detailed`，默认开启）
 
 - **Pairwise cosine similarity**：category 内所有 task 对之间的两两余弦相似度
 - **PCA 分析**：对差值向量做 SVD，返回前 3 个主成分的方差解释比。PC1 占比越高说明偏移越集中在单一方向
@@ -55,9 +55,7 @@ Hidden state 文件命名格式：`{category}_{index}_{sub_task}_{turn}.npy`
 ```
 output/hidden_state_comp_{num}/
 ├── summary.json                    # 元信息 + 每个 category 的统计结果
-├── hs_diff_cosine_boxplot.png      # 箱线图：每个 category 各 task 与均值方向的 cosine sim
-├── hs_diff_alignment_bar.png       # 柱状图：每个 category 的平均对齐度
-└── hs_diff_intra_vs_cross.png      # (--detailed) 同 category vs 跨 category 分布直方图
+└── hs_diff_summary.png             # 综合分析图（箱线图 + 统计表格）
 ```
 
 编号通过 `output/.comp_counter` 文件单调递增管理。
@@ -73,17 +71,17 @@ Category  Tasks     Mean      Std      Min      Max   [PCA-1  PCA-2]
 ## 用法
 
 ```bash
-# 基本对比
+# 基本对比（默认 q1/t0）
 python compare_hidden_states.py 177 178
 
-# 指定 sub_task 和 turn
+# 指定两个 job 共用的 sub_task 和 turn
 python compare_hidden_states.py 177 178 --sub_task q1 --turn t0
 
-# 两个 job 使用不同的 sub_task/turn
+# 两个 job 分别使用不同的 sub_task/turn
 python compare_hidden_states.py 177 178 --sub_task1 q1 --turn1 t0 --sub_task2 q2 --turn2 t0
 
-# 详细分析（含 PCA + 跨 category baseline）
-python compare_hidden_states.py 177 178 --detailed
+# 关闭详细分析（不含 PCA + 跨 category baseline）
+python compare_hidden_states.py 177 178 --no-detailed
 ```
 
 ## 参数
@@ -91,8 +89,10 @@ python compare_hidden_states.py 177 178 --detailed
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `job1`, `job2` | 必填 | 两个 job 的编号 |
-| `--sub_task` | `q1` | 两个 job 共用的子任务标识 |
-| `--turn` | `t0` | 两个 job 共用的轮次标识 |
-| `--sub_task1/2` | 无 | 分别覆盖 Job1/Job2 的子任务标识 |
-| `--turn1/2` | 无 | 分别覆盖 Job1/Job2 的轮次标识 |
-| `--detailed` | `false` | 启用 PCA 分析 + 跨 category baseline |
+| `--sub_task` | `q1` | 两个 job 共用的子任务标识（被 `--sub_task1/2` 覆盖） |
+| `--turn` | `t0` | 两个 job 共用的轮次标识（被 `--turn1/2` 覆盖） |
+| `--sub_task1` | 同 `--sub_task` | Job1 的子任务标识 |
+| `--sub_task2` | 同 `--sub_task` | Job2 的子任务标识 |
+| `--turn1` | 同 `--turn` | Job1 的轮次标识 |
+| `--turn2` | 同 `--turn` | Job2 的轮次标识 |
+| `--detailed` / `--no-detailed` | `true` | PCA 分析 + 跨 category baseline |
