@@ -26,6 +26,7 @@ ENV/
 # Output files
 experiments/
 output/
+output_persisted/
 *.jsonl
 *.log
 
