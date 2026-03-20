@@ -58,6 +58,10 @@ python batch_request.py --resume 15             # 断点续传：恢复 batch 15
 python batch_request.py --resume 15 --dry-run   # 只看状态，不执行
 python generate_report_with_charts.py
 
+# Web Dashboard（浏览结果、启动任务、监控进程）
+python manager.py              # 默认 port 8765
+python manager.py --port 9000  # 自定义端口
+
 # Tests
 python -m pytest tests/
 ```
@@ -126,6 +130,7 @@ All output goes to `output/`. Detailed structure documented in docs/output_struc
 | `compare_hidden_states.py` | Cross-job hidden states difference direction analysis |
 | `refusal_direction.py` | Refusal Direction (Difference in Means) hidden states classifier |
 | `tools/cf_tunnel.py` | Cloudflare Tunnel 管理（start/stop/status） |
+| `manager.py` | Web 管理 Dashboard（port 8765）— 浏览结果、启动任务、监控进程 |
 
 ## Configuration
 
@@ -156,4 +161,5 @@ AutoDL 远程日志路径（通过 `ssh seetacloud` 访问）：
 - docs/compare_hidden_states.md — Hidden States 差异方向分析（流程、指标、输出）
 - docs/refusal_direction.md — Refusal Direction 分析（Difference in Means 分类器）
 - docs/batch_requests_guidance.md — Batch Request 模型选取标准与配置示例
+- docs/manager.md — Web 管理 Dashboard 使用指南（启动、表单参数、API 接口）
 - COMT_GUIDE.md — CoMT 模式完整指南

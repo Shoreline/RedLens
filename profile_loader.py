@@ -162,6 +162,20 @@ def validate_profile(resolved_dict):
     if provider == "openrouter" and resolved_dict.get("llm_base_url"):
         warnings.append("provider=openrouter 同时设置了 llm_base_url，建议使用 provider=self")
 
+    # remote_image_base_url / remote_vsp_override_* 仅对 provider=self 有效
+    _remote_keys = ["remote_image_base_url", "remote_vsp_override_url", "remote_vsp_override_ssh"]
+    if any(resolved_dict.get(k) for k in _remote_keys) and provider != "self":
+        errors.append(
+            f"remote_image_base_url / remote_vsp_override_* 仅对 provider=self 有效，"
+            f"当前 provider={provider!r}"
+        )
+
+    # remote_vsp_override_url 和 remote_vsp_override_ssh 必须成对出现
+    has_url = bool(resolved_dict.get("remote_vsp_override_url"))
+    has_ssh = bool(resolved_dict.get("remote_vsp_override_ssh"))
+    if has_url != has_ssh:
+        errors.append("remote_vsp_override_url 和 remote_vsp_override_ssh 必须同时设置")
+
     return errors, warnings
 
 

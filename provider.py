@@ -77,12 +77,18 @@ class OpenRouterProvider(BaseProvider):
             if p.get("type") == "text":
                 blocks.append({"type": "text", "text": p.get("text", "")})
             elif p.get("type") == "image":
-                mime = p.get("mime") or "image/jpeg"
-                b64  = p.get("b64", "")
-                blocks.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime};base64,{b64}"}
-                })
+                if "url" in p:
+                    blocks.append({
+                        "type": "image_url",
+                        "image_url": {"url": p["url"]}
+                    })
+                else:
+                    mime = p.get("mime") or "image/jpeg"
+                    b64  = p.get("b64", "")
+                    blocks.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}"}
+                    })
         return blocks
 
     async def send(self, prompt_struct: Dict[str, Any], cfg: 'RunConfig') -> str:
@@ -324,16 +330,20 @@ class VSPProvider(BaseProvider):
         
         for i, img_part in enumerate(images):
             if img_part.get("type") == "image":
-                b64_data = img_part.get("b64", "")
-                if not b64_data:
-                    continue
-                # 直接解码base64并写入文件，不需要PIL
-                image_data = base64.b64decode(b64_data)
-                image_path = os.path.join(task_dir, f"image_{i}.jpg")
-                with open(image_path, "wb") as f:
-                    f.write(image_data)
-                # 使用绝对路径（VSP支持绝对路径）
-                task_data["images"].append(os.path.abspath(image_path))
+                if "url" in img_part:
+                    # 远程 URL 模式（provider=self 时跳过本地文件写入）
+                    task_data["images"].append(img_part["url"])
+                else:
+                    b64_data = img_part.get("b64", "")
+                    if not b64_data:
+                        continue
+                    # 直接解码base64并写入文件，不需要PIL
+                    image_data = base64.b64decode(b64_data)
+                    image_path = os.path.join(task_dir, f"image_{i}.jpg")
+                    with open(image_path, "wb") as f:
+                        f.write(image_data)
+                    # 使用绝对路径（VSP支持绝对路径）
+                    task_data["images"].append(os.path.abspath(image_path))
         
         with open(os.path.join(task_dir, "request.json"), "w") as f:
             json.dump(task_data, f, indent=2)
@@ -397,6 +407,8 @@ class VSPProvider(BaseProvider):
             # VSP Tool Override
             if getattr(cfg, 'vsp_override_images_dir', None):
                 env["VSP_OVERRIDE_IMAGES_DIR"] = cfg.vsp_override_images_dir
+            if getattr(cfg, 'remote_vsp_override_url', None):
+                env["VSP_OVERRIDE_IMAGES_URL"] = cfg.remote_vsp_override_url
 
         # LLM provider config for VSP subprocess — 按 provider 身份分支
         provider = getattr(cfg, 'provider', None) if cfg else None

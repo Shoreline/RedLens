@@ -116,6 +116,33 @@ OpenRouter 同一模型可能有多个底层提供商（如 `together`, `parasai
 | `--tunnel` | `"ssh"` | Tunnel 模式：`ssh`（SSH port forwarding）、`cf`（Cloudflare Tunnel）、`none`（跳过） |
 | `--no-ssh-tunnel` | `false` | [已废弃] 等价于 `--tunnel none` |
 
+## 远程图片（provider=self 专用）
+
+仅在 `--provider self` 时有意义。用于绕过 GFW 上传瓶颈：将图片放在 LLM 所在主机，LLM 直接读取本地 HTTP 服务，无需从本机跨国传输。
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--remote_image_base_url` | `None` | AutoDL 上 MMSB 图片 HTTP 服务根 URL（如 `http://localhost:8001`）。设置后 LLM 通过 URL 读取图片，跳过本机 base64 上传。一次性准备：`rsync ~/Downloads/MM-SafetyBench_imgs/ seetacloud:/root/MM-SafetyBench_imgs/`，然后在 AutoDL 上运行 `python -m http.server 8001 --directory /root/MM-SafetyBench_imgs/` |
+| `--remote_vsp_override_url` | `None` | （VSP 模式专用）AutoDL 上 override 图片 HTTP 服务根 URL（如 `http://localhost:8002`）。必须与 `--remote_vsp_override_ssh` 同时使用 |
+| `--remote_vsp_override_ssh` | `None` | （VSP 模式专用）override 图片的 rsync 目标（如 `seetacloud:/root/vsp_override/`）。设置后每次 job 开始前自动将 `--vsp_override_images_dir` 内容 rsync 到 AutoDL |
+
+**约束**：
+- 以上三个参数仅对 `--provider self` 有效，其他 provider 下设置这些参数会报错退出
+- `--remote_vsp_override_url` 和 `--remote_vsp_override_ssh` 必须同时设置或同时不设置
+- `--remote_vsp_override_url` 需与 `--vsp_override_images_dir` 同时使用
+
+**一次性准备（AutoDL）**：
+```bash
+# MMSB 图片服务（常驻）
+python -m http.server 8001 --directory /root/MM-SafetyBench_imgs/
+
+# Override 图片服务（常驻，内容由 RedLens 自动 rsync）
+mkdir -p /root/vsp_override/
+python -m http.server 8002 --directory /root/vsp_override/
+```
+
+**推荐做法**：将这三个参数打包到 `profiles.yaml` 的 self-provider profile 中，避免每次命令行重复填写。参见 `autodl_qwen` / `autodl_comt_vsp` profile。
+
 ## 常用命令示例
 
 ```bash

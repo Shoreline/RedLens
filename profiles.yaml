@@ -71,6 +71,10 @@ autodl_qwen:
   llm_base_url: "https://llm.yuantian.me/v1"
   tunnel: cf
   consumers: 5
+  # 远程图片（绕过 GFW 上传瓶颈，仅 provider=self 有效）
+  # 一次性准备：rsync ~/Downloads/MM-SafetyBench_imgs/ seetacloud:/root/MM-SafetyBench_imgs/
+  #             在 AutoDL 上（常驻）: python -m http.server 8001 --directory /root/MM-SafetyBench_imgs/
+  remote_image_base_url: "http://localhost:8001"  # Qwen server 直接从 AutoDL 本机取，不经 Cloudflare
 
 # 自部署 Qwen + CoMT-VSP（全部走 CF tunnel）
 autodl_comt_vsp:
@@ -82,3 +86,9 @@ autodl_comt_vsp:
   comt_sample_id: "deletion-0107"
   consumers: 3
   sampling_rate: 0.12
+  # 远程图片（绕过 GFW 上传瓶颈，仅 provider=self 有效）
+  remote_image_base_url: "http://localhost:8001"  # Qwen server 直接从 AutoDL 本机取，不经 Cloudflare
+  # VSP override 远程同步（配合 --vsp_override_images_dir 使用）
+  # 一次性准备：在 AutoDL 上（常驻）: mkdir -p /root/vsp_override && python -m http.server 8002 --directory /root/vsp_override/
+  remote_vsp_override_url: "http://localhost:8002"  # 同上
+  remote_vsp_override_ssh: "seetacloud:/root/vsp_override/"  # rsync 目标（每次 job 自动同步）

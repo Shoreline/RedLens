@@ -310,6 +310,10 @@ class RunConfig:
     tunnel_urls: Optional[Dict[str, str]] = None  # {"llm": "https://...", "grounding_dino": "https://...", ...}
     # VSP Tool Override（替换 vision tool 返回的图片）
     vsp_override_images_dir: Optional[str] = None  # override 图片目录（支持全局/类别/task 三级）
+    # 远程图片（provider=self 专用，绕过 GFW 上传瓶颈）
+    remote_image_base_url: Optional[str] = None      # MMSB 图片 HTTP 服务根 URL（如 http://autodl:8001）
+    remote_vsp_override_url: Optional[str] = None   # override 图片 HTTP 服务根 URL（如 http://autodl:8002）
+    remote_vsp_override_ssh: Optional[str] = None   # override 图片 rsync 目标（如 seetacloud:/root/vsp_override/）
 
 # ============ 数据与 Prompt ============
 
@@ -327,12 +331,14 @@ class Item:
     question: str
     image_path: str
     image_type: str = "SD"  # 记录使用的图片类型
+    image_url: Optional[str] = None  # 远程 HTTP URL（provider=self 时跳过 base64 上传）
 
 def load_mm_safety_items(
-    json_files_pattern: str, 
+    json_files_pattern: str,
     image_base_path: str,
     image_type: str = "SD",
-    categories: List[str] = None
+    categories: List[str] = None,
+    remote_image_base_url: Optional[str] = None
 ) -> Iterable[Item]:
     """
     读取 MM-SafetyBench 数据集。
@@ -382,14 +388,19 @@ def load_mm_safety_items(
                     category=category,
                     question=question,
                     image_path=image_path,
-                    image_type=image_type
+                    image_type=image_type,
+                    image_url=(
+                        f"{remote_image_base_url.rstrip('/')}/{category}/{image_type}/{index}.jpg"
+                        if remote_image_base_url else None
+                    )
                 )
 
 def load_mm_safety_by_image_types(
     json_files_pattern: str,
     image_base_path: str,
     image_types: List[str],
-    categories: List[str] = None
+    categories: List[str] = None,
+    remote_image_base_url: Optional[str] = None
 ) -> Iterable[Item]:
     """
     根据指定的图片类型列表加载 MM-SafetyBench 数据（交错加载）。
@@ -408,7 +419,7 @@ def load_mm_safety_by_image_types(
     """
     # 为每个 image_type 创建生成器
     generators = [
-        load_mm_safety_items(json_files_pattern, image_base_path, img_type, categories)
+        load_mm_safety_items(json_files_pattern, image_base_path, img_type, categories, remote_image_base_url)
         for img_type in image_types
     ]
     
@@ -451,7 +462,10 @@ def create_prompt(item: Item, *, prompt_config: Optional[Dict]=None, mode: str =
         {"type": "text", "text": f"Question: {item.question}"}
     ]
     # 一图示例；如果条目有多图，你可以在 load 处扩展成列表再 append 多次
-    parts.append({"type": "image", "b64": img_to_b64(item.image_path)})
+    if item.image_url:
+        parts.append({"type": "image", "url": item.image_url})
+    else:
+        parts.append({"type": "image", "b64": img_to_b64(item.image_path)})
 
     # 构建 meta 信息（index 始终包含，用于 hidden states 文件命名等）
     meta = {"category": item.category, "index": item.index}
@@ -1106,6 +1120,19 @@ def _copy_override_images_to_job(src_dir: str, job_folder: str):
         print(f"⚠️  复制 override 图片失败: {e}")
 
 
+def _rsync_override_to_remote(local_dir: str, ssh_dest: str):
+    """将本地 override 目录同步到 AutoDL（job 开始前自动调用）"""
+    cmd = ["rsync", "-avz", "--delete",
+           local_dir.rstrip("/") + "/",
+           ssh_dest.rstrip("/") + "/"]
+    print(f"🔄 同步 override 图片到远程: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"❌ rsync 失败:\n{result.stderr}")
+        sys.exit(1)
+    print(f"✅ override 图片同步完成")
+
+
 def clean_sensitive_paths(output_dir: str) -> Dict[str, int]:
     """
     清理输出目录中的绝对路径，将主目录路径替换为 ~
@@ -1292,7 +1319,8 @@ async def run_pipeline(
     image_base_path: str,
     cfg: RunConfig,
     image_types: List[str] = None,
-    categories: List[str] = None
+    categories: List[str] = None,
+    remote_image_base_url: Optional[str] = None
 ):
     if image_types is None:
         image_types = ["SD"]
@@ -1321,7 +1349,8 @@ async def run_pipeline(
         json_files_pattern,
         image_base_path,
         image_types,
-        categories
+        categories,
+        remote_image_base_url
     )
     
     # 如果需要采样，先将生成器转换为列表
@@ -1535,6 +1564,21 @@ if __name__ == "__main__":
                        help="VSP tool override 图片目录。启用后 vision tool 跳过远程调用，"
                             "返回目录中的预备图片。支持全局/类别/task 三级粒度")
 
+    # 远程图片（provider=self 专用，绕过 GFW 上传瓶颈）
+    parser.add_argument("--remote_image_base_url", default=None,
+                       help="（provider=self 专用）AutoDL 上 MMSB 图片的 HTTP 服务根 URL（如 http://autodl:8001）。"
+                            "LLM 直接从本地读取，跳过 GFW 上传瓶颈。"
+                            "一次性准备：rsync ~/Downloads/MM-SafetyBench_imgs/ seetacloud:/root/imgs/ "
+                            "&& 在 AutoDL 上执行 python -m http.server 8001 --directory /root/imgs/")
+    parser.add_argument("--remote_vsp_override_url", default=None,
+                       help="（provider=self + VSP 模式专用）AutoDL 上 override 图片的 HTTP 服务根 URL（如 http://autodl:8002）。"
+                            "必须与 --remote_vsp_override_ssh 同时使用。"
+                            "一次性准备：在 AutoDL 上执行 python -m http.server 8002 --directory /root/vsp_override/")
+    parser.add_argument("--remote_vsp_override_ssh", default=None,
+                       help="（provider=self + VSP 模式专用）override 图片的 rsync 目标（如 seetacloud:/root/vsp_override/）。"
+                            "设置后每次 job 开始前自动将 --vsp_override_images_dir 同步到 AutoDL。"
+                            "必须与 --remote_vsp_override_url 同时使用。")
+
     # Custom LLM endpoint (for self-hosted models on AWS, etc.)
     parser.add_argument("--llm_base_url", default=None,
                        help="Custom LLM API base URL (e.g., http://34.210.214.193:8000/v1)")
@@ -1701,6 +1745,19 @@ if __name__ == "__main__":
         print(f"❌ 错误: sampling_rate 必须在 0.0 到 1.0 之间，当前值: {args.sampling_rate}")
         sys.exit(1)
 
+    # 验证远程图片参数（仅 provider=self 有效）
+    _remote_args = [args.remote_image_base_url, args.remote_vsp_override_url, args.remote_vsp_override_ssh]
+    if any(_remote_args) and args.provider != "self":
+        print("❌ 错误: --remote_image_base_url / --remote_vsp_override_* 仅对 provider=self 有效")
+        print(f"   当前 provider={args.provider!r}，请检查配置。")
+        sys.exit(1)
+    if bool(args.remote_vsp_override_url) != bool(args.remote_vsp_override_ssh):
+        print("❌ 错误: --remote_vsp_override_url 和 --remote_vsp_override_ssh 必须同时设置")
+        sys.exit(1)
+    if args.remote_vsp_override_url and not args.vsp_override_images_dir:
+        print("❌ 错误: --remote_vsp_override_url 必须与 --vsp_override_images_dir 同时使用")
+        sys.exit(1)
+
     # 验证 VSP Tool Override 参数
     if args.vsp_override_images_dir:
         if args.mode == "direct":
@@ -1744,6 +1801,9 @@ if __name__ == "__main__":
         llm_api_key=args.llm_api_key,
         openrouter_provider=args.openrouter_provider,
         vsp_override_images_dir=args.vsp_override_images_dir,
+        remote_image_base_url=args.remote_image_base_url,
+        remote_vsp_override_url=args.remote_vsp_override_url,
+        remote_vsp_override_ssh=args.remote_vsp_override_ssh,
     )
 
     # ============ 保存运行配置（供 job_fix.py 读取）============
@@ -1774,6 +1834,9 @@ if __name__ == "__main__":
             "vsp_postproc_method": args.vsp_postproc_method,
             "vsp_postproc_fallback": args.vsp_postproc_fallback,
             "vsp_override_images_dir": args.vsp_override_images_dir,
+            "remote_image_base_url": args.remote_image_base_url,
+            "remote_vsp_override_url": args.remote_vsp_override_url,
+            "remote_vsp_override_ssh": args.remote_vsp_override_ssh,
             "tunnel": tunnel_mode,
             "max_tasks": args.max_tasks,
         }
@@ -1783,6 +1846,10 @@ if __name__ == "__main__":
         # 复制 override 图片到 job 目录
         if args.vsp_override_images_dir:
             _copy_override_images_to_job(args.vsp_override_images_dir, temp_job_folder)
+
+    # 自动 rsync override 图片到 AutoDL（provider=self 时）
+    if args.vsp_override_images_dir and getattr(args, 'remote_vsp_override_ssh', None):
+        _rsync_override_to_remote(args.vsp_override_images_dir, args.remote_vsp_override_ssh)
 
     # ============ Tunnel (AutoDL) ============
     if cfg.mode in ("vsp", "comt_vsp") and tunnel_mode != "none":
@@ -1809,7 +1876,8 @@ if __name__ == "__main__":
         image_base_path=args.image_base,
         cfg=cfg,
         image_types=args.image_types,
-        categories=args.categories
+        categories=args.categories,
+        remote_image_base_url=args.remote_image_base_url,
     ))
     
     request_duration = time.time() - request_start
